@@ -1,0 +1,42 @@
+name: 'CodeSentinel Security Scan'
+description: 'Preflight security gate — catch secrets and env leaks before you deploy'
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  directory:
+    description: 'Directory to scan (relative to repo root)'
+    required: false
+    default: '.'
+  fail-on:
+    description: 'Fail threshold: critical, high, medium, low'
+    required: false
+    default: 'high'
+
+outputs:
+  findings-count:
+    description: 'Total number of findings'
+    value: ${{ steps.scan.outputs.findings-count }}
+  risk-score:
+    description: 'Risk score (0-100)'
+    value: ${{ steps.scan.outputs.risk-score }}
+  risk-level:
+    description: 'Risk level: low, medium, high, critical'
+    value: ${{ steps.scan.outputs.risk-level }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Run CodeSentinel
+      id: scan
+      shell: bash
+      env:
+        INPUT_DIRECTORY: ${{ inputs.directory }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+      run: node "${{ github.action_path }}/dist/action.mjs"

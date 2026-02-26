@@ -1,0 +1,25 @@
+node_modules/
+.next/
+out/
+dist/
+build/
+.env
+.env.local
+.env.production
+*.pem
+drizzle/
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+
+# Layer B experiment repos (cloned for testing)
+layer-b-repos/
+layer-b-fresh/
+layer-b-results/
+matuskalis-repos/
+validation-repos/
+validation-results/
+
+# Experiment data
+layer-b-repos.json
+layer-b-fresh-repos.json

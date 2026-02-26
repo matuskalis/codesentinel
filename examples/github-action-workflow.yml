@@ -1,0 +1,35 @@
+# .github/workflows/security-scan.yml
+#
+# CodeSentinel Security Scan
+# Runs on every pull request and push to main.
+# Fails the check if high or critical severity findings are detected.
+
+name: Security Scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: CodeSentinel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run CodeSentinel
+        id: codesentinel
+        uses: codesentinel/scan@v1
+        with:
+          fail-on: high
+
+      - name: Print results
+        if: always()
+        run: |
+          echo "Findings: ${{ steps.codesentinel.outputs.findings-count }}"
+          echo "Risk score: ${{ steps.codesentinel.outputs.risk-score }}"
+          echo "Risk level: ${{ steps.codesentinel.outputs.risk-level }}"
