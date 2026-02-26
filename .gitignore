@@ -1,7 +1,7 @@
 node_modules/
 .next/
 out/
-dist/
+# dist/ — committed for GitHub Action (composite actions require JS files in repo)
 build/
 .env
 .env.local
