@@ -2,12 +2,18 @@
 
 Deterministic security scanner for startup-stack code. Catch secrets, env leaks, and misconfigurations before they ship.
 
-[![npm version](https://img.shields.io/npm/v/codesentinel.svg)](https://www.npmjs.com/package/codesentinel) [![license](https://img.shields.io/npm/l/codesentinel.svg)](LICENSE) [![CI](https://github.com/matuskalis/codesentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/matuskalis/codesentinel/actions/workflows/ci.yml)
+[![CI](https://github.com/matuskalis/codesentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/matuskalis/codesentinel/actions/workflows/ci.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Quick Start
 
+Not published to npm yet -- clone and build it:
+
 ```bash
-npx codesentinel scan .
+git clone https://github.com/matuskalis/codesentinel.git
+cd codesentinel
+pnpm install
+pnpm cli:build
+node dist/codesentinel.mjs scan /path/to/your/project
 ```
 
 ```
@@ -25,12 +31,20 @@ npx codesentinel scan .
 
 ## Installation
 
-```bash
-# Run without installing
-npx codesentinel scan .
+CodeSentinel is not on npm yet, so there is no `npx codesentinel`. Build the
+CLI from source and either call the bundle directly or link it onto your PATH:
 
-# Or install globally
-npm install -g codesentinel
+```bash
+git clone https://github.com/matuskalis/codesentinel.git
+cd codesentinel
+pnpm install
+pnpm cli:build
+
+# call it directly
+node dist/codesentinel.mjs scan .
+
+# or put `codesentinel` on your PATH for this checkout
+pnpm link --global
 codesentinel scan .
 ```
 
@@ -113,9 +127,12 @@ CodeSentinel uses deterministic regex-based pattern matching -- no AI, no LLMs, 
 ## CI Integration
 
 ```bash
-# Any CI pipeline
-npx codesentinel scan . --fail-on high --quiet
+# Any CI pipeline, against a built checkout
+node dist/codesentinel.mjs scan . --fail-on high --quiet
 ```
+
+This repository also ships `action.yml`, so a GitHub Actions workflow can use
+it directly with `uses: matuskalis/codesentinel@main`.
 
 ## Exit Codes
 
