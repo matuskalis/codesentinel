@@ -2,13 +2,16 @@
 
 ## Project Overview
 
-CodeSentinel is a GitHub App that automatically scans pull requests for security vulnerabilities. It detects hardcoded secrets, SQL injection, XSS, insecure API configurations, and other security issues in startup-stack code (Next.js, Supabase, Firebase, Stripe, OpenAI).
+CodeSentinel is a deterministic security scanner for Next.js stacks. It catches hardcoded secrets, env variables leaking into the client bundle, and misconfigurations (Stripe, Supabase) before deploy. It ships three ways:
+
+1. **CLI** (`dist/codesentinel.mjs`, bundled with esbuild, no runtime dependencies). This is the product.
+2. **GitHub Action** (`action.yml`, composite, runs `dist/action.mjs`).
+3. **GitHub App prototype** in the same repo: webhook, BullMQ worker, Postgres, dashboard. It uses the same scanner. Not needed for the CLI or the Action, and not verified end to end (needs GitHub App credentials).
 
 **Key Characteristics:**
 - Deterministic pattern matching (no LLM calls - zero hallucinations)
-- Scans PRs automatically via GitHub webhooks
-- Posts inline PR comments with fix suggestions
-- Dashboard for viewing scans and managing settings
+- 5 registered rules. `src/lib/rules/` also holds 7 unregistered candidate rules (with unit tests) that no entry point runs
+- Only high-confidence findings can fail a build (except `--fail-on low`, which fails on anything)
 
 ## Tech Stack
 
@@ -17,7 +20,7 @@ CodeSentinel is a GitHub App that automatically scans pull requests for security
 - **BullMQ** + Redis 7 (job queue)
 - **@octokit/app** (GitHub App integration)
 - **Pino** (structured logging)
-- **Vitest** (testing - 354 tests)
+- **Vitest** (testing)
 - **Tailwind CSS 4** (dark theme only)
 - **jose** (JWT sessions)
 - **zod** (validation)
@@ -34,8 +37,8 @@ src/
       queries/             # Query functions organized by entity
     github/                # GitHub App setup, webhook handling, API calls
     jobs/                  # BullMQ queue setup, job producers, handlers
-    rules/                 # 12 security detection rules
-      index.ts             # Rule registry and applicability logic
+    rules/                 # 5 registered rules + 7 unregistered candidates
+      index.ts             # Rule registry (allRules) and applicability logic
       hardcoded-secrets.ts # Example rule
       ...
     scanner/               # Core scan engine, diff parsing, file classification
@@ -45,9 +48,12 @@ src/
     api/                   # Next.js API routes
     (dashboard)/           # Dashboard pages (grouped route)
   components/              # UI components (custom, no external UI lib)
+  cli/                     # CLI and Action entry points, file walker, terminal formatter
 worker/
   index.ts                 # BullMQ worker entry point (separate process)
 tests/                     # Vitest test files
+fixtures/ + expected/      # Scanner regression fixtures and their pinned findings
+dist/                      # Committed bundles: the Action runs dist/action.mjs
 ```
 
 ## Key Conventions
@@ -113,7 +119,7 @@ tests/                     # Vitest test files
 - Max 512KB per file
 - 2-minute timeout for entire scan
 - 5-second timeout per rule execution
-- Skip patterns: node_modules, .git, dist, build, .next, etc.
+- Skip patterns: node_modules, dist, build, .next, coverage, lockfiles, binaries. Matched per path segment (`src/rebuild/` is scanned, `build/` is not)
 
 ### Rate Limiting
 - API routes have in-memory rate limiting
@@ -132,8 +138,13 @@ pnpm db:migrate       # Apply migrations
 pnpm db:studio        # Open Drizzle Studio (DB GUI)
 
 # Testing
-pnpm test:run         # Run all tests (354 tests)
+pnpm test:run         # Run all tests
 pnpm test             # Watch mode
+pnpm fixtures         # Fixture regression with recall and precision summary
+
+# CLI
+pnpm cli:build        # Bundle dist/codesentinel.mjs and dist/action.mjs (commit both)
+node dist/codesentinel.mjs scan <dir> [--fail-on high] [--json] [--quiet]
 
 # Production
 pnpm build            # Build Next.js
@@ -168,8 +179,10 @@ See `.env.example` for full list. Key vars:
 1. Create file in `src/lib/rules/my-rule.ts`
 2. Implement `RuleDefinition` interface
 3. Export the rule constant
-4. Add to `allRules` array in `src/lib/rules/index.ts`
-5. Add tests in `tests/rules/my-rule.test.ts`
+4. Add to `allRules` array in `src/lib/rules/index.ts` (a rule that is not listed there never runs)
+5. Add tests in `tests/lib/rules/my-rule.test.ts`, positive and negative cases
+6. Add a fixture under `fixtures/` with its `expected/*.json` if the rule needs file context
+7. `pnpm cli:build` and commit `dist/` (CI fails when `dist/` is stale)
 
 ### Database Queries
 
@@ -197,11 +210,11 @@ scanLogger.error({ error }, 'Scan failed')
 
 ## Testing Notes
 
-- 354 tests total across rules, scanner, scoring, and integration
-- Use Vitest for all tests
+- Vitest for all tests: rules, scanner, scoring, CLI, reporting, fixtures
 - Mock GitHub API calls with test fixtures
 - Rule tests should have positive and negative cases
-- Database tests use in-memory SQLite (configured in test setup)
+- Fake credentials in tests are intended. Assemble provider-shaped keys at runtime (see `tests/cli/integration.test.ts`) so GitHub push protection stays quiet
+- `.env*` files cannot be committed: a fixture stores `_env.local` and the runner scans it as `.env.local`
 
 ## Codebase Patterns to Follow
 
@@ -224,6 +237,6 @@ scanLogger.error({ error }, 'Scan failed')
 
 - Session tokens are SHA-256 hashed before storage
 - Fingerprints are created from rule ID + file path + snippet hash
-- Risk score uses weighted severity (critical=10, high=7, medium=4, low=2)
+- Risk score: severity weight (critical 25, high 15, medium 8, low 3) times confidence weight (high 1.0, medium 0.6, low 0.3), summed and capped at 100. Levels: 81+ critical, 51+ high, 21+ medium, else low
 - PR comments are upserted (update existing comment if found)
 - Worker graceful shutdown requires SIGTERM handling
