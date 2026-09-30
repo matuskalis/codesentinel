@@ -48,6 +48,7 @@ function makeReportInput(overrides: Partial<ReportInput> = {}): ReportInput {
         filesScanned: 5,
         rulesApplied: 12,
         scanDurationMs: 150,
+        filesNotScanned: 0,
       },
       ...overrides.result,
     } as ScanResult,
@@ -85,6 +86,7 @@ describe('formatSummaryComment', () => {
           filesScanned: 3,
           rulesApplied: 12,
           scanDurationMs: 200,
+          filesNotScanned: 0,
         },
       },
     })
@@ -110,6 +112,7 @@ describe('formatSummaryComment', () => {
           filesScanned: 5,
           rulesApplied: 12,
           scanDurationMs: 100,
+          filesNotScanned: 0,
         },
       },
     })
@@ -139,6 +142,7 @@ describe('formatSummaryComment', () => {
           filesScanned: 5,
           rulesApplied: 12,
           scanDurationMs: 100,
+          filesNotScanned: 0,
         },
       },
     })
@@ -188,6 +192,7 @@ describe('formatSummaryComment', () => {
           filesScanned: 1,
           rulesApplied: 12,
           scanDurationMs: 50,
+          filesNotScanned: 0,
         },
       },
     })
@@ -215,6 +220,7 @@ describe('formatSummaryComment', () => {
           filesScanned: 1,
           rulesApplied: 12,
           scanDurationMs: 50,
+          filesNotScanned: 0,
         },
       },
     })
@@ -248,6 +254,7 @@ describe('formatSummaryComment', () => {
           filesScanned: 10,
           rulesApplied: 12,
           scanDurationMs: 300,
+          filesNotScanned: 0,
         },
       },
     })

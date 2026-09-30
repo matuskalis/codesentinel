@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { formatTerminal, formatJson, formatFailMessage, formatPassMessage } from '@/cli/formatter'
+import {
+  formatTerminal,
+  formatJson,
+  formatFailMessage,
+  formatPassMessage,
+  formatIncompleteMessage,
+} from '@/cli/formatter'
 import type { ScanResult, RuleFinding } from '@/types'
 
 // Assembled at runtime to avoid GitHub push protection false positive
@@ -16,6 +22,7 @@ function makeScanResult(overrides: Partial<ScanResult> = {}): ScanResult {
       filesScanned: 5,
       rulesApplied: 12,
       scanDurationMs: 42,
+      filesNotScanned: 0,
     },
     ...overrides,
   }
@@ -77,6 +84,7 @@ describe('formatTerminal', () => {
         filesScanned: 5,
         rulesApplied: 12,
         scanDurationMs: 42,
+        filesNotScanned: 0,
       },
     })
     const output = formatTerminal(result, '/tmp/project', '0.1.0')
@@ -142,6 +150,41 @@ describe('formatTerminal', () => {
     expect(formatTerminal(two, '.', '0.1.0')).toContain('2 findings\x1b')
   })
 
+  it('should warn, right under the file count, when the scan did not reach every file', () => {
+    const result = makeScanResult({
+      summary: { ...makeScanResult().summary, filesScanned: 18, filesNotScanned: 7 },
+    })
+    const stripped = formatTerminal(result, '.', '0.1.0').replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toContain('18 files scanned')
+    expect(stripped).toContain('! Time limit reached: 7 files were not scanned')
+  })
+
+  it('should use the singular when a single file was not reached', () => {
+    const result = makeScanResult({
+      summary: { ...makeScanResult().summary, filesNotScanned: 1 },
+    })
+    const stripped = formatTerminal(result, '.', '0.1.0').replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toContain('! Time limit reached: 1 file was not scanned')
+  })
+
+  it('should not call a scan clean when it did not reach every file', () => {
+    const result = makeScanResult({
+      summary: { ...makeScanResult().summary, filesScanned: 0, filesNotScanned: 3 },
+    })
+    const stripped = formatTerminal(result, '.', '0.1.0').replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toContain('No findings in the files scanned')
+    expect(stripped).not.toContain('clean scan')
+  })
+
+  it('should not warn when every file was scanned', () => {
+    const stripped = formatTerminal(makeScanResult(), '.', '0.1.0').replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).not.toContain('Time limit')
+  })
+
   it('should not contain em dashes', () => {
     const result = makeScanResult({ findings: [makeFinding()], riskScore: 25, riskLevel: 'medium' })
 
@@ -163,6 +206,7 @@ describe('formatTerminal', () => {
         filesScanned: 5,
         rulesApplied: 12,
         scanDurationMs: 42,
+        filesNotScanned: 0,
       },
     })
     const output = formatTerminal(result, '/tmp/project', '0.1.0')
@@ -186,6 +230,7 @@ describe('formatTerminal', () => {
         filesScanned: 5,
         rulesApplied: 12,
         scanDurationMs: 42,
+        filesNotScanned: 0,
       },
     })
     const output = formatTerminal(result, '/tmp/project', '0.1.0')
@@ -211,6 +256,7 @@ describe('formatTerminal', () => {
         filesScanned: 5,
         rulesApplied: 12,
         scanDurationMs: 42,
+        filesNotScanned: 0,
       },
     })
     const output = formatTerminal(result, '/tmp/project', '0.1.0')
@@ -319,5 +365,16 @@ describe('formatPassMessage', () => {
 
     expect(stripped).toContain('(2 reported)')
     expect(stripped).toContain('high confidence')
+  })
+})
+
+describe('formatIncompleteMessage', () => {
+  it('says the scan is incomplete, not a pass, and how to raise the limit', () => {
+    const stripped = formatIncompleteMessage().replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toContain('Scan incomplete, not a pass')
+    expect(stripped).toContain('CODESENTINEL_SCAN_TIMEOUT_MS')
+    expect(stripped).not.toContain('passed')
+    expect(stripped).not.toContain('\u2014')
   })
 })

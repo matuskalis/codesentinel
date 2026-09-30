@@ -60,6 +60,7 @@ describe('PR scan flow integration', () => {
         filesScanned: files.length,
         rulesApplied: allRules.length,
         scanDurationMs: 42,
+        filesNotScanned: 0,
       },
     }
 

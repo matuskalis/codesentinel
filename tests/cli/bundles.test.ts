@@ -11,6 +11,7 @@ const CLI_BUNDLE = path.join(PROJECT_ROOT, 'dist', 'codesentinel.mjs')
 const ACTION_BUNDLE = path.join(PROJECT_ROOT, 'dist', 'action.mjs')
 const SUPABASE_FIXTURE = 'fixtures/next-supabase-service-key-client'
 const STRIPE_FIXTURE = 'fixtures/next-stripe-webhook-no-verify'
+const CUT_SHORT = { CODESENTINEL_SCAN_TIMEOUT_MS: '0' }
 
 let outputDir: string
 let outputCounter = 0
@@ -23,12 +24,20 @@ afterAll(() => {
   fs.rmSync(outputDir, { recursive: true, force: true })
 })
 
-function runCliBundle(args: string[]) {
-  const result = spawnSync('node', [CLI_BUNDLE, ...args], { cwd: PROJECT_ROOT, encoding: 'utf-8' })
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*m/g, '')
+}
+
+function runCliBundle(args: string[], extraEnv: Record<string, string> = {}) {
+  const result = spawnSync('node', [CLI_BUNDLE, ...args], {
+    cwd: PROJECT_ROOT,
+    encoding: 'utf-8',
+    env: { ...process.env, ...extraEnv },
+  })
   return { stdout: result.stdout, stderr: result.stderr, exitCode: result.status }
 }
 
-function runActionBundle(inputs: { directory: string; failOn: string }) {
+function runActionBundle(inputs: { directory: string; failOn: string }, extraEnv: Record<string, string> = {}) {
   const outputFile = path.join(outputDir, `github-output-${outputCounter++}`)
   fs.writeFileSync(outputFile, '')
   const result = spawnSync('node', [ACTION_BUNDLE], {
@@ -39,6 +48,7 @@ function runActionBundle(inputs: { directory: string; failOn: string }) {
       INPUT_DIRECTORY: inputs.directory,
       INPUT_FAIL_ON: inputs.failOn,
       GITHUB_OUTPUT: outputFile,
+      ...extraEnv,
     },
   })
   return { stdout: result.stdout, exitCode: result.status, outputs: fs.readFileSync(outputFile, 'utf-8') }
@@ -73,6 +83,17 @@ describe('dist/codesentinel.mjs', () => {
     expect(exitCode).toBe(2)
     expect(stderr).toContain('directory not found')
   })
+
+  it('exits 3 and does not say passed when the time limit cuts the scan short', () => {
+    const { stdout, exitCode } = runCliBundle(['scan', STRIPE_FIXTURE], CUT_SHORT)
+    const output = stripAnsi(stdout)
+
+    expect(exitCode).toBe(3)
+    expect(output).toContain('Time limit reached: 3 files were not scanned')
+    expect(output).toContain('Scan incomplete, not a pass')
+    expect(output).not.toContain('Scan passed')
+    expect(output).not.toContain('clean scan')
+  })
 })
 
 describe('dist/action.mjs', () => {
@@ -106,6 +127,16 @@ describe('dist/action.mjs', () => {
 
   it('blocks the same finding at fail-on low', () => {
     expect(runActionBundle({ directory: STRIPE_FIXTURE, failOn: 'low' }).exitCode).toBe(1)
+  })
+
+  it('warns, fails with exit 3 and still writes the outputs when the time limit cuts the scan short', () => {
+    const { stdout, exitCode, outputs } = runActionBundle({ directory: STRIPE_FIXTURE, failOn: 'high' }, CUT_SHORT)
+
+    expect(exitCode).toBe(3)
+    expect(stdout).toContain('::warning::CodeSentinel scan incomplete: 3 files were not scanned')
+    expect(stdout).toContain('::error::CodeSentinel scan incomplete')
+    expect(stdout).not.toContain('scan passed')
+    expect(outputs).toBe('findings-count=0\nrisk-score=0\nrisk-level=low\n')
   })
 
   it('rejects an unknown fail-on value with exit 2', () => {

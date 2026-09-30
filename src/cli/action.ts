@@ -4,8 +4,9 @@ process.env.LOG_LEVEL = 'silent'
 import * as path from 'node:path'
 import * as fs from 'node:fs'
 import { buildFileChanges } from './walker.js'
+import { exitCodeFor } from './exit-code.js'
 import { runScan } from '@/lib/scanner'
-import { DIRECTORY_SCAN_LIMITS } from '@/lib/scan-limits'
+import { directoryScanLimits } from '@/lib/scan-limits'
 import type { Severity, RuleFinding } from '@/types'
 
 const SEVERITY_ORDER: Record<Severity, number> = {
@@ -74,7 +75,7 @@ async function main(): Promise<void> {
   }
 
   const files = buildFileChanges(absoluteDir)
-  const result = await runScan(files, [], DIRECTORY_SCAN_LIMITS)
+  const result = await runScan(files, [], directoryScanLimits())
 
   // Emit annotations for each finding
   const sorted = [...result.findings].sort(
@@ -85,9 +86,20 @@ async function main(): Promise<void> {
     emitAnnotation(finding)
   }
 
+  const { filesNotScanned } = result.summary
+  if (filesNotScanned > 0) {
+    const verb = filesNotScanned === 1 ? 'file was' : 'files were'
+    process.stdout.write(
+      `::warning::CodeSentinel scan incomplete: ${filesNotScanned} ${verb} not scanned because the time limit was reached.\n`
+    )
+  }
+
   // Grouped summary for the Actions log
   process.stdout.write('::group::CodeSentinel Scan Summary\n')
   process.stdout.write(`Files scanned: ${result.summary.filesScanned}\n`)
+  if (filesNotScanned > 0) {
+    process.stdout.write(`Files not scanned: ${filesNotScanned}\n`)
+  }
   process.stdout.write(`Rules applied: ${result.summary.rulesApplied}\n`)
   process.stdout.write(`Scan duration: ${result.summary.scanDurationMs}ms\n`)
   process.stdout.write(`Total findings: ${result.summary.totalFindings}\n`)
@@ -118,12 +130,20 @@ async function main(): Promise<void> {
 
   // Determine if the scan should fail
   const blockingCount = shouldFail(result.findings, failOn)
+  const exitCode = exitCodeFor(blockingCount, filesNotScanned)
 
   if (blockingCount > 0) {
     process.stdout.write(
       `\n::error::CodeSentinel found ${blockingCount} blocking finding(s) at ${failOn}+ severity. Scan failed.\n`
     )
-    process.exit(1)
+    process.exit(exitCode)
+  }
+
+  if (filesNotScanned > 0) {
+    process.stdout.write(
+      '\n::error::CodeSentinel scan incomplete, not a pass. Raise the time limit with CODESENTINEL_SCAN_TIMEOUT_MS (milliseconds).\n'
+    )
+    process.exit(exitCode)
   }
 
   process.stdout.write('\nCodeSentinel scan passed: no blocking findings.\n')

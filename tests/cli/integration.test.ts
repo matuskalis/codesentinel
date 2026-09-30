@@ -20,14 +20,14 @@ let dirtyDir: string
 let cleanDir: string
 let mediumOnlyDir: string
 
-function runCli(args: string, cwd?: string): { stdout: string; exitCode: number } {
+function runCli(args: string, extraEnv: Record<string, string> = {}): { stdout: string; exitCode: number } {
   try {
     const stdout = execSync(
       `node --import tsx src/cli/index.ts -- ${args}`,
       {
         cwd: PROJECT_ROOT,
         encoding: 'utf-8',
-        env: { ...process.env, LOG_LEVEL: 'silent' },
+        env: { ...process.env, LOG_LEVEL: 'silent', ...extraEnv },
         timeout: 30000,
         stdio: ['pipe', 'pipe', 'pipe'],
       }
@@ -276,6 +276,50 @@ describe('CLI integration', () => {
     })
   })
 
+  describe('time limit', () => {
+    const cutShort = { CODESENTINEL_SCAN_TIMEOUT_MS: '0' }
+
+    it('should exit 3 and say the scan is incomplete, not passed, when the limit cuts it short', () => {
+      const { stdout, exitCode } = runCli(`scan ${cleanDir}`, cutShort)
+      const output = stripAnsi(stdout)
+
+      expect(exitCode).toBe(3)
+      expect(output).toContain('! Time limit reached: 1 file was not scanned')
+      expect(output).toContain('Scan incomplete, not a pass')
+      expect(output).not.toContain('Scan passed')
+      expect(output).not.toContain('clean scan')
+    })
+
+    it('should exit 3 with --quiet and print nothing', () => {
+      const { stdout, exitCode } = runCli(`scan ${cleanDir} --quiet`, cutShort)
+
+      expect(stdout.trim()).toBe('')
+      expect(exitCode).toBe(3)
+    })
+
+    it('should show the unscanned count in --json output and exit 3', () => {
+      const { stdout, exitCode } = runCli(`scan ${cleanDir} --json`, cutShort)
+      const parsed = JSON.parse(stdout)
+
+      expect(exitCode).toBe(3)
+      expect(parsed.summary.filesScanned).toBe(0)
+      expect(parsed.summary.filesNotScanned).toBe(1)
+    })
+
+    it('should report filesNotScanned as 0 and exit 0 when the scan finishes', () => {
+      const { stdout, exitCode } = runCli(`scan ${cleanDir} --json`)
+
+      expect(exitCode).toBe(0)
+      expect(JSON.parse(stdout).summary.filesNotScanned).toBe(0)
+    })
+
+    it('should exit 2 when the limit is not a whole number of milliseconds', () => {
+      const { exitCode } = runCli(`scan ${cleanDir}`, { CODESENTINEL_SCAN_TIMEOUT_MS: 'soon' })
+
+      expect(exitCode).toBe(2)
+    })
+  })
+
   describe('medium-confidence findings', () => {
     it('should report a high-severity finding without failing at --fail-on high', () => {
       const { stdout, exitCode } = runCli(`scan ${STRIPE_FIXTURE} --fail-on high`)
@@ -311,6 +355,7 @@ describe('CLI integration', () => {
       expect(stdout).toContain('--fail-on')
       expect(stdout).toContain('--quiet')
       expect(stdout).toContain('Exit codes')
+      expect(stdout).toContain('3  scan incomplete')
       expect(stdout).not.toContain('--verbose')
     })
 

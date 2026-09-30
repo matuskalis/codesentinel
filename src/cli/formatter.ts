@@ -65,11 +65,18 @@ export function formatTerminal(result: ScanResult, dir: string, version: string)
   lines.push('')
   lines.push(`Scanning ${BOLD}${dir}${RESET}`)
   lines.push(`${GREEN}\u2713${RESET} ${summary.filesScanned} files scanned in ${summary.scanDurationMs}ms`)
+  if (summary.filesNotScanned > 0) {
+    const verb = summary.filesNotScanned === 1 ? 'file was' : 'files were'
+    lines.push(`${YELLOW}!${RESET} ${BOLD}Time limit reached:${RESET} ${summary.filesNotScanned} ${verb} not scanned`)
+  }
   lines.push(`${GREEN}\u2713${RESET} ${summary.rulesApplied} rules applied`)
   lines.push('')
 
   if (findings.length === 0) {
-    const boxContent = `  ${GREEN}\u2713${RESET} ${BOLD}No findings${RESET}, clean scan`
+    const boxContent =
+      summary.filesNotScanned > 0
+        ? `  ${YELLOW}!${RESET} ${BOLD}No findings${RESET} in the files scanned`
+        : `  ${GREEN}\u2713${RESET} ${BOLD}No findings${RESET}, clean scan`
     const boxLine = '\u2500'.repeat(45)
     lines.push(`\u250C${boxLine}\u2510`)
     lines.push(`\u2502${boxContent.padEnd(45 + countAnsiChars(boxContent))}\u2502`)
@@ -121,6 +128,10 @@ export function formatPassMessage(reportedCount = 0): string {
 
   const hint = 'Findings block only at high confidence (--fail-on low blocks on any finding).'
   return `${passed} (${reportedCount} reported)\n  ${DIM}${hint}${RESET}`
+}
+
+export function formatIncompleteMessage(): string {
+  return `${RED}\u2716${RESET} Scan incomplete, not a pass. Raise the time limit with CODESENTINEL_SCAN_TIMEOUT_MS (milliseconds).`
 }
 
 function countAnsiChars(str: string): number {

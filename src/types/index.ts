@@ -80,6 +80,7 @@ export interface ScanSummary {
   totalFindings: number
   bySeverity: Record<Severity, number>
   filesScanned: number
+  filesNotScanned: number
   rulesApplied: number
   scanDurationMs: number
 }

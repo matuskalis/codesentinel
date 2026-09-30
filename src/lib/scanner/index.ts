@@ -24,7 +24,7 @@ export async function runScan(
     .slice(0, limits.maxFilesPerScan)
 
   for (const file of filesToScan) {
-    if (Date.now() - startTime > limits.scanTimeoutMs) {
+    if (Date.now() - startTime >= limits.scanTimeoutMs) {
       logger.warn({ filesScanned, totalFiles: filesToScan.length }, 'Scan timeout reached')
       break
     }
@@ -71,6 +71,7 @@ export async function runScan(
       totalFindings: dedupedFindings.length,
       bySeverity,
       filesScanned,
+      filesNotScanned: filesToScan.length - filesScanned,
       rulesApplied: rulesApplied.size,
       scanDurationMs: scanDuration,
     },

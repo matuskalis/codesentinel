@@ -3,9 +3,10 @@ process.env.LOG_LEVEL = 'silent'
 import * as path from 'node:path'
 import * as fs from 'node:fs'
 import { buildFileChanges } from './walker.js'
-import { formatTerminal, formatJson, formatFailMessage, formatPassMessage } from './formatter.js'
+import { formatTerminal, formatJson, formatFailMessage, formatPassMessage, formatIncompleteMessage } from './formatter.js'
+import { exitCodeFor } from './exit-code.js'
 import { runScan } from '@/lib/scanner'
-import { DIRECTORY_SCAN_LIMITS } from '@/lib/scan-limits'
+import { directoryScanLimits } from '@/lib/scan-limits'
 import type { Severity } from '@/types'
 
 const VERSION = '0.1.0'
@@ -98,9 +99,10 @@ Options:
   --quiet             Suppress output, exit code only
 
 Exit codes:
-  0  no blocking findings
+  0  scan finished, no blocking findings
   1  blocking findings
   2  usage error
+  3  scan incomplete: the time limit (CODESENTINEL_SCAN_TIMEOUT_MS) cut it short
 
 Examples:
   codesentinel scan .
@@ -154,7 +156,7 @@ async function main(): Promise<void> {
   }
 
   const files = buildFileChanges(absoluteDir)
-  const result = await runScan(files, [], DIRECTORY_SCAN_LIMITS)
+  const result = await runScan(files, [], directoryScanLimits())
 
   if (options.json && !options.quiet) {
     process.stdout.write(formatJson(result) + '\n')
@@ -163,18 +165,21 @@ async function main(): Promise<void> {
   }
 
   const failCount = shouldFail(result.findings, options.failOn)
+  const exitCode = exitCodeFor(failCount, result.summary.filesNotScanned)
 
   if (!options.quiet && !options.json) {
     if (failCount > 0) {
       process.stdout.write(formatFailMessage(failCount, options.failOn) + '\n')
+    } else if (result.summary.filesNotScanned > 0) {
+      process.stdout.write(formatIncompleteMessage() + '\n')
     } else {
       process.stdout.write(formatPassMessage(result.findings.length) + '\n')
     }
     process.stdout.write('\n')
   }
 
-  if (failCount > 0) {
-    process.exit(1)
+  if (exitCode !== 0) {
+    process.exit(exitCode)
   }
 }
 
