@@ -117,7 +117,7 @@ dist/                      # Committed bundles: the Action runs dist/action.mjs
 ### Scan Limits
 - Max 500 files per scan
 - Max 512KB per file
-- 2-minute timeout for entire scan
+- 2-minute timeout for entire scan. The CLI and Action report files not reached (`summary.filesNotScanned`) and exit 3; `CODESENTINEL_SCAN_TIMEOUT_MS` overrides the limit
 - 5-second timeout per rule execution
 - Skip patterns: node_modules, dist, build, .next, coverage, lockfiles, binaries. Matched per path segment (`src/rebuild/` is scanned, `build/` is not)
 

@@ -10,6 +10,8 @@ This is a real session, not a mockup. `scripts/render-demo.mjs` copies `fixtures
 
 What happened: rule `supabase-service-key-client` matched `SUPABASE_SERVICE_ROLE_KEY` in `app/page.tsx`, a `'use client'` file. That key bypasses Row Level Security, and a client component ships to every visitor's browser. The fix is the anon key. The second scan is clean and exits 0.
 
+The line `3 rules applied` counts the registered rules that had at least one file to read in this scan: three of the five. `env-committed` and `next-public-secret` only read `.env` files, and this fixture has none.
+
 ## Quickstart
 
 CodeSentinel is version 0.1.0 and is not on npm. Build it from source. Building needs Node 20.11 or newer and pnpm (9 and 11 tested). The bundle it produces has no dependencies beyond Node itself.
@@ -50,7 +52,7 @@ jobs:
 
 `@v1` is the v0.1.0 release tag and carries this `action.yml` and `dist/action.mjs`. `@main` also has the fixes merged after it (path skipping, git-ignore awareness, no 500-file cap), which are not in a tag yet.
 
-Inputs: `directory` (default `.`) and `fail-on` (default `high`). Outputs: `findings-count`, `risk-score`, `risk-level`. Every finding becomes an annotation on its line (error for critical and high, warning for medium, notice for low), and the step fails when a finding blocks. The action is composite: it sets up Node 20 and runs the committed bundle, so there is no install or build step. CI rebuilds `dist/` on every push and fails when the committed copy differs.
+Inputs: `directory` (default `.`) and `fail-on` (default `high`). Outputs: `findings-count`, `risk-score`, `risk-level`. Every finding becomes an annotation on its line (error for critical and high, warning for medium, notice for low), and the step fails when a finding blocks or when the time limit cuts the scan short (exit 3). The action is composite: it sets up Node 20 and runs the committed bundle, so there is no install or build step. CI rebuilds `dist/` on every push and fails when the committed copy differs.
 
 ## What it catches
 
@@ -74,7 +76,7 @@ files on disk -> walker -> classifier -> rules -> dedupe -> score -> exit code
 
 - The walker skips `node_modules`, `dist`, `build`, `.next`, `coverage`, lockfiles, images, fonts and archives by path segment, and files over 512 KB. `src/rebuild/` is scanned, `build/` is not.
 - The classifier labels each file: language, client or server context (a `'use client'` line, `/components/`, `/hooks/`, route handlers, `'use server'`), route type, and whether it is a test.
-- A rule only sees files it applies to. Test files are skipped by the rules that say so.
+- A rule only sees files it applies to, and the `N rules applied` line in the output counts the rules that had at least one file to read. Test files are skipped by the rules that say so.
 - Findings are deduplicated by fingerprint, a SHA-256 of rule id, path and the whitespace-normalised snippet.
 - The exit code is decided by severity and confidence, not by the score.
 
@@ -96,19 +98,19 @@ codesentinel scan [directory]
   --version, --help
 ```
 
-Exit codes: `0` nothing blocks, `1` a finding blocks, `2` usage error (unknown flag, missing directory, bad level).
+Exit codes: `0` the scan finished and nothing blocks, `1` a finding blocks, `2` usage error (unknown flag, missing directory, bad level or time limit), `3` the time limit cut the scan short and nothing in the part that was scanned blocks. An incomplete scan prints a warning and is never a `0`. The limit is two minutes, and `CODESENTINEL_SCAN_TIMEOUT_MS` changes it.
 
-`--json` prints `findings` (each with `ruleId`, `severity`, `confidence`, `title`, `description`, `explanation`, `fixSuggestion`, `filePath`, `startLine`, `endLine`, `snippet`, `fingerprint`), `riskScore`, `riskLevel` and `summary` (`totalFindings`, `bySeverity`, `filesScanned`, `rulesApplied`, `scanDurationMs`).
+`--json` prints `findings` (each with `ruleId`, `severity`, `confidence`, `title`, `description`, `explanation`, `fixSuggestion`, `filePath`, `startLine`, `endLine`, `snippet`, `fingerprint`), `riskScore`, `riskLevel` and `summary` (`totalFindings`, `bySeverity`, `filesScanned`, `filesNotScanned`, `rulesApplied`, `scanDurationMs`).
 
 ## Evidence
 
 Numbers from runs at this commit, on an M1 Pro.
 
-- **Tests:** 504 passing in 28 files (`pnpm test:run`, about 15 seconds). They cover each rule with positive and negative cases, the scanner, scoring, the walker, the formatter, the CLI through its exit codes, and the committed `dist/` bundles the Action runs.
+- **Tests:** 536 passing in 29 files (`pnpm test:run`, about 15 seconds). They cover each rule with positive and negative cases, the scanner, scoring, the walker, the formatter, the CLI through its exit codes, and the committed `dist/` bundles the Action runs.
 - **Fixtures:** `pnpm fixtures` scans 3 fixtures (7 files) and finds 6 of 6 expected findings with 0 unexpected ones. These are hand-written regression cases, not a benchmark. They show the rules still do what they were written to do, not how often they are right on other people's code.
 - **Real-world precision and recall:** not measured here. Earlier runs over public repositories are not reproduced in this repository, so this README makes no claim about them.
-- **Speed:** scanning this repository (146 files) takes a median of 14 ms inside the scanner and 123 ms wall clock including Node start-up and the git check (21 runs). The laptop was under heavy load, so read these as upper bounds.
-- **Size:** the CLI bundle is 36.0 KiB and the Action bundle 31.3 KiB. Both import only Node built-ins.
+- **Speed:** scanning this repository (149 files) takes a median of 11 ms inside the scanner and 78 ms wall clock including Node start-up and the git check (21 runs). The laptop was under heavy load, so read these as upper bounds.
+- **Size:** the CLI bundle is 37.6 KiB and the Action bundle 32.8 KiB. Both import only Node built-ins.
 - **CI:** typecheck, tests, CLI and dashboard builds, a check that committed `dist/` equals a fresh build, a scan of `src/` that fails on any finding, and the Action itself run on two fixtures.
 
 ## Design decisions and what they cost
@@ -119,7 +121,8 @@ Numbers from runs at this commit, on an M1 Pro.
 
 ## Limits
 
-- **Files on disk.** The CLI scans a directory, not a commit. Inside a git repository it asks `git check-ignore` which files `.gitignore` covers and skips the two committed-secret rules for those untracked files (tracked files are still checked). Outside a repository, or without `git` on the PATH, a local `.env.local` is reported as committed. `next-public-secret` still reads git-ignored env files, because the value reaches the bundle either way.
+- **Files on disk.** The CLI scans a directory, not a commit. Inside a git repository it asks `git check-ignore` which files `.gitignore` covers and skips the two committed-secret rules for those untracked files (tracked files are still checked). Outside a repository, or without `git` on the PATH, a local `.env.local` is reported as committed. If a parent repository ignores the scan root itself (a vendored copy, say), the git signal is dropped and every file is scanned. `next-public-secret` still reads git-ignored env files, because the value reaches the bundle either way.
+- **Time limit.** A scan stops after two minutes (`CODESENTINEL_SCAN_TIMEOUT_MS` changes it, in milliseconds). It then prints how many files it never reached, says the scan is incomplete, and exits 3, so a cut-off scan cannot pass as clean. This repository scans in about 11 ms, so the limit only matters for very large trees.
 - **File types.** Only `.ts .tsx .js .jsx .mjs .cjs .json .yml .yaml` and `.env*`. Nothing for Python, Go, Dockerfiles or Markdown. No entropy detection.
 - **Client context is inferred.** A helper that a client component imports is not followed.
 - **No suppression.** There is no ignore file, inline comment or config. A false positive cannot be silenced in the CLI or the Action, only fixed or kept below the threshold. The GitHub App's dashboard can mute a rule.
