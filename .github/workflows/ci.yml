@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -34,8 +37,46 @@ jobs:
       - name: Run tests
         run: pnpm test:run
 
-      - name: Build CLI
+      - name: Build CLI and Action bundles
         run: pnpm cli:build
 
-      - name: Self-dogfood scan
-        run: node dist/codesentinel.mjs scan . --fail-on critical
+      - name: Committed dist matches a fresh build
+        run: git diff --exit-code -- dist
+
+      - name: Self-scan the source tree (fails on any finding)
+        run: node dist/codesentinel.mjs scan src --fail-on low
+
+      - name: Build dashboard
+        run: pnpm build
+
+  action:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Action blocks on a critical finding
+        id: blocking
+        uses: ./
+        with:
+          directory: fixtures/next-supabase-service-key-client
+          fail-on: high
+        continue-on-error: true
+
+      - name: Action passes and reports a medium-confidence finding
+        id: advisory
+        uses: ./
+        with:
+          directory: fixtures/next-stripe-webhook-no-verify
+          fail-on: high
+
+      - name: Check both results
+        env:
+          BLOCKING_OUTCOME: ${{ steps.blocking.outcome }}
+          ADVISORY_COUNT: ${{ steps.advisory.outputs.findings-count }}
+          ADVISORY_LEVEL: ${{ steps.advisory.outputs.risk-level }}
+        run: |
+          test "$BLOCKING_OUTCOME" = "failure"
+          test "$ADVISORY_COUNT" = "1"
+          test "$ADVISORY_LEVEL" = "low"

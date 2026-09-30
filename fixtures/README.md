@@ -1,42 +1,51 @@
-# CodeSentinel Fixtures
+# CodeSentinel fixtures
 
-Deterministic test fixtures for security rule validation. Each fixture is a minimal, self-contained project that triggers (or intentionally does not trigger) specific rules.
-
-## Structure
+Small projects that trigger (or deliberately do not trigger) the rules. They are the regression suite for the scanner: every finding is pinned by rule, severity, confidence, file and line in `expected/`.
 
 ```
 fixtures/
-  next-supabase-service-key-client/   # Fixture 1: service role key in client code
-  next-stripe-webhook-no-verify/      # Fixture 2: Stripe webhook without signature check
-  next-nextpublic-secret/             # Fixture 3: secrets exposed via NEXT_PUBLIC_ prefix
+  next-supabase-service-key-client/   service role key in a 'use client' page
+  next-stripe-webhook-no-verify/      Stripe webhook without signature check
+  next-nextpublic-secret/             secrets behind NEXT_PUBLIC_ in an env file
 expected/
-  next-supabase-service-key-client.json
-  next-stripe-webhook-no-verify.json
-  next-nextpublic-secret.json
+  <fixture-name>.json                 the findings the scanner must report, nothing more
 ```
+
+Each fixture has negative controls, files that must stay silent: a server route using the service key, a fixed webhook that calls `constructEvent`, a payments route that is not a webhook, the Supabase anon key and the Stripe publishable key in the env file.
+
+Everything in here is fake and intentionally insecure. Do not copy it into a real project.
 
 ## Running
 
 ```bash
-# Run all fixtures (compare against expected output)
-LOG_LEVEL=silent npx tsx scripts/run-fixtures.ts
+# All fixtures, prints PASS or FAIL per fixture and a recall and precision summary
+pnpm fixtures
 
-# Run a single fixture
-LOG_LEVEL=silent npx tsx scripts/run-fixtures.ts next-stripe-webhook-no-verify
+# One fixture
+pnpm fixtures next-stripe-webhook-no-verify
 
-# Run via Vitest (includes determinism + line-offset tests)
-pnpm test:run -- tests/fixtures.test.ts
+# Through Vitest (also checks determinism and that line numbers follow the content)
+pnpm test:run tests/fixtures.test.ts
 ```
 
-## Adding a new fixture
+Current result: 6 of 6 expected findings found, 0 unexpected, over 3 fixtures and 7 files.
 
-1. Create a directory under `fixtures/` with minimal files that trigger (and don't trigger) the rule
-2. Run the scanner to see actual output:
+## Dotfiles
+
+`.env*` files cannot be committed to this repository, so a fixture stores them with an underscore and the runner restores the dot before scanning. `next-nextpublic-secret/_env.local` is scanned as `.env.local`, and that is the path `expected/next-nextpublic-secret.json` uses.
+
+Values that look like real keys are not stored either. The file holds `{{openai-key}}` and `{{supabase-anon-jwt}}`, and `tests/fixture-runner.ts` assembles the fake values when the fixture is scanned, so secret scanners have nothing to flag in the repository. The runner copies the fixture to a temporary directory and scans it with the same file walker the CLI uses.
+
+## Adding a fixture
+
+1. Create a directory under `fixtures/` with minimal files that trigger the rule and files that should not.
+2. Scan it and read every finding:
    ```bash
-   LOG_LEVEL=silent npx tsx scripts/validate-scanner.ts fixtures/your-fixture-name
+   pnpm cli:build
+   node dist/codesentinel.mjs scan fixtures/your-fixture-name --json
    ```
-3. Verify every finding is a true positive and every negative control produces zero findings
-4. Create `expected/your-fixture-name.json` with the schema:
+3. Check that every finding is a true positive and every negative control is silent.
+4. Write `expected/your-fixture-name.json`:
    ```json
    {
      "fixture": "your-fixture-name",
@@ -52,21 +61,12 @@ pnpm test:run -- tests/fixtures.test.ts
      ]
    }
    ```
-5. Run `LOG_LEVEL=silent npx tsx scripts/run-fixtures.ts your-fixture-name` to verify PASS
-6. The Vitest test auto-discovers new fixtures from `expected/*.json`
+5. Run `pnpm fixtures your-fixture-name`. The Vitest suite picks the new fixture up from `expected/`.
 
-## Updating expected outputs
+Fixtures are excluded from `tsc` (they import packages this repository does not install) and from the CI self-scan (they are intentionally vulnerable).
 
-When a rule changes behavior intentionally:
+## Design
 
-1. Run the scanner on the affected fixture to see new output
-2. Verify every finding is correct
-3. Update the corresponding `expected/*.json`
-4. Run the full suite to confirm: `LOG_LEVEL=silent npx tsx scripts/run-fixtures.ts`
-
-## Design principles
-
-- **Tiny files**: each fixture file is under 20 lines. No dependencies to install.
-- **Exact line numbers**: expected output pins start_line/end_line. The regression test verifies line offsets shift correctly when content changes.
-- **Negative controls**: every fixture includes files that should NOT trigger the rule (server-side usage, fixed versions, benign variables).
-- **Deterministic**: running twice produces identical output. No timestamps, no randomness.
+- Tiny files, no dependencies to install.
+- Exact line numbers are pinned, and a test checks that they move when the content moves.
+- Deterministic: two runs give identical findings. No timestamps, no randomness.

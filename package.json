@@ -46,6 +46,7 @@
     "typecheck": "tsc --noEmit",
     "cli:build": "node --import tsx scripts/build-cli.ts",
     "cli:dev": "node --import tsx src/cli/index.ts",
+    "fixtures": "LOG_LEVEL=silent node --import tsx scripts/run-fixtures.ts",
     "prepublishOnly": "npm run cli:build"
   },
   "devDependencies": {
