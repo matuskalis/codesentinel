@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
+import { execFileSync } from 'node:child_process'
 import { walkDirectory, buildFileChanges } from '@/cli/walker'
 
 let tmpDir: string
@@ -227,5 +228,67 @@ describe('buildFileChanges', () => {
     expect(filePaths).toContain(path.join('src', 'rebuild', 'payments.ts'))
     expect(filePaths).toContain(path.join('scripts', 'build-invoices.ts'))
     expect(filePaths).toContain(path.join('src', 'distance.ts'))
+  })
+})
+
+describe('buildFileChanges inside a git repository', () => {
+  let repoDir: string
+
+  beforeAll(() => {
+    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codesentinel-git-'))
+    execFileSync('git', ['init', '-q'], { cwd: repoDir, stdio: 'ignore' })
+    fs.writeFileSync(path.join(repoDir, '.gitignore'), '.env.local\n.env.production\nlocal-config.json\n')
+    fs.writeFileSync(path.join(repoDir, '.env.local'), 'LOCAL_ONLY=1\n')
+    fs.writeFileSync(path.join(repoDir, '.env.production'), 'FORCE_ADDED=1\n')
+    fs.writeFileSync(path.join(repoDir, '.env'), 'COMMITTED=1\n')
+    fs.writeFileSync(path.join(repoDir, 'local-config.json'), '{}\n')
+    fs.writeFileSync(path.join(repoDir, 'index.ts'), 'export const a = 1;\n')
+    fs.mkdirSync(path.join(repoDir, 'src'))
+    fs.writeFileSync(path.join(repoDir, 'src', 'nested.ts'), 'export const nested = true;\n')
+    execFileSync('git', ['add', '-f', '.env.production'], { cwd: repoDir, stdio: 'ignore' })
+  })
+
+  afterAll(() => {
+    fs.rmSync(repoDir, { recursive: true, force: true })
+  })
+
+  const isIgnored = (files: ReturnType<typeof buildFileChanges>, filePath: string) =>
+    files.find(f => f.filePath === filePath)?.gitIgnored
+
+  it('should mark untracked files that .gitignore covers', () => {
+    const files = buildFileChanges(repoDir)
+
+    expect(isIgnored(files, '.env.local')).toBe(true)
+    expect(isIgnored(files, 'local-config.json')).toBe(true)
+  })
+
+  it('should not mark a tracked file even when .gitignore covers it', () => {
+    const files = buildFileChanges(repoDir)
+
+    expect(isIgnored(files, '.env.production')).toBe(false)
+  })
+
+  it('should not mark files that .gitignore does not cover', () => {
+    const files = buildFileChanges(repoDir)
+
+    expect(isIgnored(files, '.env')).toBe(false)
+    expect(isIgnored(files, 'index.ts')).toBe(false)
+    expect(isIgnored(files, path.join('src', 'nested.ts'))).toBe(false)
+  })
+
+  it('should apply the parent repository rules when scanning a subdirectory', () => {
+    fs.writeFileSync(path.join(repoDir, 'src', '.env.local'), 'NESTED_LOCAL=1\n')
+
+    const files = buildFileChanges(path.join(repoDir, 'src'))
+
+    expect(isIgnored(files, '.env.local')).toBe(true)
+    expect(isIgnored(files, 'nested.ts')).toBe(false)
+  })
+
+  it('should mark nothing outside a git repository', () => {
+    const files = buildFileChanges(tmpDir)
+
+    expect(files.length).toBeGreaterThan(0)
+    expect(files.every(f => !f.gitIgnored)).toBe(true)
   })
 })

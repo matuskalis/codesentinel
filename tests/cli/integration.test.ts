@@ -158,6 +158,44 @@ describe('CLI integration', () => {
     })
   })
 
+  describe('git-ignored env files', () => {
+    it('should not call a git-ignored .env.local committed, but still flag NEXT_PUBLIC_ secrets in it', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codesentinel-ignored-'))
+      try {
+        execSync('git init -q', { cwd: repoDir, stdio: 'ignore' })
+        fs.writeFileSync(path.join(repoDir, '.gitignore'), '.env.local\n')
+        fs.writeFileSync(
+          path.join(repoDir, '.env.local'),
+          `STRIPE_SECRET_KEY=${FAKE_SK_LIVE}\nNEXT_PUBLIC_API_SECRET=s3cr3t-never-meant-for-browsers\n`
+        )
+
+        const parsed = JSON.parse(runCli(`scan ${repoDir} --json`).stdout)
+        const rules = parsed.findings.map((finding: { ruleId: string }) => finding.ruleId)
+
+        expect(rules).toEqual(['next-public-secret'])
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true })
+      }
+    })
+
+    it('should still call an env file committed when it is tracked', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codesentinel-tracked-'))
+      try {
+        execSync('git init -q', { cwd: repoDir, stdio: 'ignore' })
+        fs.writeFileSync(path.join(repoDir, '.gitignore'), '.env.local\n')
+        fs.writeFileSync(path.join(repoDir, '.env.local'), `STRIPE_SECRET_KEY=${FAKE_SK_LIVE}\n`)
+        execSync('git add -f .env.local', { cwd: repoDir, stdio: 'ignore' })
+
+        const parsed = JSON.parse(runCli(`scan ${repoDir} --json`).stdout)
+        const rules = parsed.findings.map((finding: { ruleId: string }) => finding.ruleId).sort()
+
+        expect(rules).toEqual(['env-committed', 'hardcoded-secrets'])
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true })
+      }
+    })
+  })
+
   describe('large projects', () => {
     it('should scan every file, not only the first 500', () => {
       const bigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codesentinel-big-'))

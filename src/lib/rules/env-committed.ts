@@ -65,6 +65,7 @@ export const envCommittedRule: RuleDefinition = {
     if (isSafeFile) return findings
 
     if (file.status !== 'added' && file.status !== 'modified') return findings
+    if (file.gitIgnored) return findings
 
     if (!hasRealSecrets(file.content)) return findings
 

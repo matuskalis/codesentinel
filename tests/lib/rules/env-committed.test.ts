@@ -236,6 +236,17 @@ describe('env-committed', () => {
       expect(findings[0].endLine).toBe(3)
     })
 
+    it('should not flag a file that .gitignore keeps out of the repository', () => {
+      const file = makeFileChange({
+        filePath: '.env.local',
+        status: 'added',
+        content: 'SECRET_KEY=real_value_one',
+        gitIgnored: true,
+      })
+
+      expect(envCommittedRule.run(file, classification)).toEqual([])
+    })
+
     it('should have a fingerprint', () => {
       const file = makeFileChange({
         filePath: '.env',

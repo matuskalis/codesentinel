@@ -25,6 +25,7 @@ export interface FileChange {
   patch?: string
   additions: LineRange[]
   deletions: LineRange[]
+  gitIgnored?: boolean
 }
 
 export interface LineRange {
