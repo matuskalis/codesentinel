@@ -23,7 +23,7 @@ jobs:
 
       - name: Run CodeSentinel
         id: codesentinel
-        uses: codesentinel/scan@v1
+        uses: matuskalis/codesentinel@v1
         with:
           fail-on: high
 

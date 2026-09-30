@@ -179,6 +179,38 @@ describe('runScan', () => {
     })
   })
 
+  describe('time limit', () => {
+    const files: FileChange[] = [
+      makeFile({ filePath: 'src/a.ts', content: 'const a = 1' }),
+      makeFile({ filePath: 'src/b.ts', content: `const key = "${FAKE_SK_LIVE}"` }),
+    ]
+
+    it('should report the files it never reached when the time limit is hit', async () => {
+      const result = await runScan(files, [], { ...DEFAULT_SCAN_LIMITS, scanTimeoutMs: 0 })
+
+      expect(result.summary.filesScanned).toBe(0)
+      expect(result.summary.filesNotScanned).toBe(2)
+    })
+
+    it('should report no unscanned files when the scan finishes', async () => {
+      const result = await runScan(files)
+
+      expect(result.summary.filesScanned).toBe(2)
+      expect(result.summary.filesNotScanned).toBe(0)
+    })
+
+    it('should not count files skipped on purpose as unscanned', async () => {
+      const skipped = [
+        makeFile({ filePath: 'node_modules/x/index.ts', content: 'const a = 1' }),
+        makeFile({ filePath: 'src/gone.ts', content: 'const b = 2', status: 'deleted' }),
+      ]
+
+      const result = await runScan(skipped, [], { ...DEFAULT_SCAN_LIMITS, scanTimeoutMs: 0 })
+
+      expect(result.summary.filesNotScanned).toBe(0)
+    })
+  })
+
   describe('empty inputs', () => {
     it('should return zero findings for empty file list', async () => {
       const result = await runScan([])

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { formatTerminal, formatJson, formatFailMessage, formatPassMessage } from '@/cli/formatter'
+import {
+  formatTerminal,
+  formatJson,
+  formatFailMessage,
+  formatPassMessage,
+  formatIncompleteMessage,
+} from '@/cli/formatter'
 import type { ScanResult, RuleFinding } from '@/types'
 
 // Assembled at runtime to avoid GitHub push protection false positive
@@ -16,6 +22,7 @@ function makeScanResult(overrides: Partial<ScanResult> = {}): ScanResult {
       filesScanned: 5,
       rulesApplied: 12,
       scanDurationMs: 42,
+      filesNotScanned: 0,
     },
     ...overrides,
   }
@@ -77,6 +84,7 @@ describe('formatTerminal', () => {
         filesScanned: 5,
         rulesApplied: 12,
         scanDurationMs: 42,
+        filesNotScanned: 0,
       },
     })
     const output = formatTerminal(result, '/tmp/project', '0.1.0')
@@ -85,6 +93,105 @@ describe('formatTerminal', () => {
     expect(output).toContain('Stripe live secret key detected')
     expect(output).toContain('src/lib/api-client.ts:10')
     expect(output).toContain('Move the key to an environment variable')
+  })
+
+  it('should separate the severity label from the title even for CRITICAL', () => {
+    const result = makeScanResult({
+      findings: [makeFinding({ severity: 'critical', title: 'Critical issue' })],
+      riskScore: 25,
+      riskLevel: 'medium',
+    })
+    const stripped = formatTerminal(result, '/tmp/project', '0.1.0').replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toMatch(/CRITICAL {2,}Critical issue/)
+  })
+
+  it('should name the rule that caught each finding next to its location', () => {
+    const result = makeScanResult({
+      findings: [makeFinding({ ruleId: 'next-public-secret', filePath: '.env.local', startLine: 4 })],
+      riskScore: 25,
+      riskLevel: 'medium',
+    })
+    const stripped = formatTerminal(result, '/tmp/project', '0.1.0').replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toContain('.env.local:4  next-public-secret')
+  })
+
+  it('should wrap long fix suggestions to 80 columns and keep every word', () => {
+    const fixSuggestion = 'Never use the Supabase service role key in client-side code. Use the anon key for client-side and service role key only in server-side API routes.'
+    const result = makeScanResult({
+      findings: [makeFinding({ fixSuggestion })],
+      riskScore: 25,
+      riskLevel: 'medium',
+    })
+    const stripped = formatTerminal(result, '/tmp/project', '0.1.0').replace(/\x1b\[[0-9;]*m/g, '')
+    const fixLines = stripped.split('\n').filter(line => line.startsWith('            ') && !line.includes(':10'))
+
+    expect(fixLines.length).toBeGreaterThan(1)
+    for (const line of fixLines) expect(line.length).toBeLessThanOrEqual(80)
+    expect(fixLines.map(line => line.replace('\u2192', '').trim()).join(' ')).toBe(fixSuggestion)
+  })
+
+  it('should use the singular for a single finding and the plural otherwise', () => {
+    const one = makeScanResult({
+      findings: [makeFinding()],
+      riskScore: 25,
+      riskLevel: 'medium',
+      summary: { ...makeScanResult().summary, totalFindings: 1, bySeverity: { critical: 1, high: 0, medium: 0, low: 0 } },
+    })
+    const two = makeScanResult({
+      findings: [makeFinding(), makeFinding({ fingerprint: 'other' })],
+      riskScore: 50,
+      riskLevel: 'high',
+      summary: { ...makeScanResult().summary, totalFindings: 2, bySeverity: { critical: 2, high: 0, medium: 0, low: 0 } },
+    })
+
+    expect(formatTerminal(one, '.', '0.1.0')).toContain('1 finding\x1b')
+    expect(formatTerminal(two, '.', '0.1.0')).toContain('2 findings\x1b')
+  })
+
+  it('should warn, right under the file count, when the scan did not reach every file', () => {
+    const result = makeScanResult({
+      summary: { ...makeScanResult().summary, filesScanned: 18, filesNotScanned: 7 },
+    })
+    const stripped = formatTerminal(result, '.', '0.1.0').replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toContain('18 files scanned')
+    expect(stripped).toContain('! Time limit reached: 7 files were not scanned')
+  })
+
+  it('should use the singular when a single file was not reached', () => {
+    const result = makeScanResult({
+      summary: { ...makeScanResult().summary, filesNotScanned: 1 },
+    })
+    const stripped = formatTerminal(result, '.', '0.1.0').replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toContain('! Time limit reached: 1 file was not scanned')
+  })
+
+  it('should not call a scan clean when it did not reach every file', () => {
+    const result = makeScanResult({
+      summary: { ...makeScanResult().summary, filesScanned: 0, filesNotScanned: 3 },
+    })
+    const stripped = formatTerminal(result, '.', '0.1.0').replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toContain('No findings in the files scanned')
+    expect(stripped).not.toContain('clean scan')
+  })
+
+  it('should not warn when every file was scanned', () => {
+    const stripped = formatTerminal(makeScanResult(), '.', '0.1.0').replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).not.toContain('Time limit')
+  })
+
+  it('should not contain em dashes', () => {
+    const result = makeScanResult({ findings: [makeFinding()], riskScore: 25, riskLevel: 'medium' })
+
+    expect(formatTerminal(result, '/tmp/project', '0.1.0')).not.toContain('\u2014')
+    expect(formatTerminal(makeScanResult(), '/tmp/project', '0.1.0')).not.toContain('\u2014')
+    expect(formatFailMessage(2, 'high')).not.toContain('\u2014')
+    expect(formatPassMessage(2)).not.toContain('\u2014')
   })
 
   it('should show risk score and risk level', () => {
@@ -99,6 +206,7 @@ describe('formatTerminal', () => {
         filesScanned: 5,
         rulesApplied: 12,
         scanDurationMs: 42,
+        filesNotScanned: 0,
       },
     })
     const output = formatTerminal(result, '/tmp/project', '0.1.0')
@@ -122,6 +230,7 @@ describe('formatTerminal', () => {
         filesScanned: 5,
         rulesApplied: 12,
         scanDurationMs: 42,
+        filesNotScanned: 0,
       },
     })
     const output = formatTerminal(result, '/tmp/project', '0.1.0')
@@ -147,6 +256,7 @@ describe('formatTerminal', () => {
         filesScanned: 5,
         rulesApplied: 12,
         scanDurationMs: 42,
+        filesNotScanned: 0,
       },
     })
     const output = formatTerminal(result, '/tmp/project', '0.1.0')
@@ -203,6 +313,12 @@ describe('formatJson', () => {
 })
 
 describe('formatFailMessage', () => {
+  it('should use the singular for one finding', () => {
+    const stripped = formatFailMessage(1, 'high').replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toBe('\u2716 Scan failed: 1 blocking finding at high or above')
+  })
+
   it('should include the count of findings', () => {
     const output = formatFailMessage(3, 'high')
 
@@ -238,5 +354,27 @@ describe('formatPassMessage', () => {
 
     const stripped = output.replace(/\x1b\[[0-9;]*m/g, '')
     expect(stripped.toLowerCase()).toContain('no blocking findings')
+  })
+
+  it('should stay a single line when nothing was reported', () => {
+    expect(formatPassMessage(0)).not.toContain('\n')
+  })
+
+  it('should explain why reported findings did not block', () => {
+    const stripped = formatPassMessage(2).replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toContain('(2 reported)')
+    expect(stripped).toContain('high confidence')
+  })
+})
+
+describe('formatIncompleteMessage', () => {
+  it('says the scan is incomplete, not a pass, and how to raise the limit', () => {
+    const stripped = formatIncompleteMessage().replace(/\x1b\[[0-9;]*m/g, '')
+
+    expect(stripped).toContain('Scan incomplete, not a pass')
+    expect(stripped).toContain('CODESENTINEL_SCAN_TIMEOUT_MS')
+    expect(stripped).not.toContain('passed')
+    expect(stripped).not.toContain('\u2014')
   })
 })

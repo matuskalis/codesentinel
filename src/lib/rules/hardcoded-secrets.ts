@@ -30,6 +30,10 @@ const KNOWN_EXAMPLE_JWTS = new Set([
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ',
 ])
 
+function withLeadingSlash(filePath: string): string {
+  return filePath.startsWith('/') ? filePath : '/' + filePath
+}
+
 function isExampleOrFixtureFile(filePath: string): boolean {
   return EXAMPLE_FILE_PATTERNS.test(filePath) || FIXTURE_PATTERNS.test(filePath)
 }
@@ -83,8 +87,11 @@ export const hardcodedSecretsRule: RuleDefinition = {
     const findings: RuleFinding[] = []
 
     if (classification.isTest) return findings
-    if (isExampleOrFixtureFile(file.filePath)) return findings
-    if (isAutogenDocsFile(file.filePath)) return findings
+    if (file.gitIgnored) return findings
+
+    const matchPath = withLeadingSlash(file.filePath)
+    if (isExampleOrFixtureFile(matchPath)) return findings
+    if (isAutogenDocsFile(matchPath)) return findings
 
     const lines = file.content.split('\n')
 

@@ -1,25 +1,36 @@
 node_modules/
 .next/
 out/
-# dist/ — committed for GitHub Action (composite actions require JS files in repo)
+# dist/ is committed on purpose: the composite GitHub Action runs dist/action.mjs
 build/
-.env
-.env.local
-.env.production
+coverage/
+.env*
+!.env.example
 *.pem
+*.log
 drizzle/
 .DS_Store
+CLAUDE.local.md
 *.tsbuildinfo
 next-env.d.ts
 
-# Layer B experiment repos (cloned for testing)
+# Experiment repos cloned for testing (other people's code) and their results
 layer-b-repos/
 layer-b-fresh/
 layer-b-results/
+layer-b-fresh-results/
 matuskalis-repos/
 validation-repos/
 validation-results/
-
-# Experiment data
 layer-b-repos.json
 layer-b-fresh-repos.json
+scripts/scan-fresh-batch.ts
+
+# Private planning and evaluation notes, local only
+BUSINESS_PLAN.md
+PITCH.md
+EVALUATION.md
+EVALUATOR_PROMPT.md
+VALIDATION_PLAN.md
+TECH_STACK.md
+LAYER_B_PROTOCOL.md

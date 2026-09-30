@@ -1,5 +1,5 @@
 name: 'CodeSentinel Security Scan'
-description: 'Preflight security gate — catch secrets and env leaks before you deploy'
+description: 'Preflight security gate for Next.js stacks: catch secrets and env leaks before you deploy'
 branding:
   icon: 'shield'
   color: 'red'

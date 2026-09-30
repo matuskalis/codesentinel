@@ -7,6 +7,7 @@ import * as fs2 from "node:fs";
 // src/cli/walker.ts
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 
 // src/lib/scan-limits.ts
 var DEFAULT_SCAN_LIMITS = {
@@ -47,17 +48,35 @@ var DEFAULT_SCAN_LIMITS = {
     "*.gz"
   ]
 };
+var SCAN_TIMEOUT_ENV = "CODESENTINEL_SCAN_TIMEOUT_MS";
+function scanTimeoutFromEnv(env) {
+  const raw = env[SCAN_TIMEOUT_ENV];
+  if (raw === void 0 || raw === "") return DEFAULT_SCAN_LIMITS.scanTimeoutMs;
+  if (!/^\d+$/.test(raw)) throw new Error(`${SCAN_TIMEOUT_ENV} must be a whole number of milliseconds, got "${raw}"`);
+  return Number(raw);
+}
+function directoryScanLimits(env = process.env) {
+  return {
+    ...DEFAULT_SCAN_LIMITS,
+    maxFilesPerScan: Number.POSITIVE_INFINITY,
+    scanTimeoutMs: scanTimeoutFromEnv(env)
+  };
+}
 function shouldSkipFile(filePath, limits = DEFAULT_SCAN_LIMITS) {
+  const segments = filePath.split(/[\\/]/);
+  const fileName = segments[segments.length - 1];
   return limits.skipPatterns.some((pattern) => {
     if (pattern.startsWith("*.")) {
-      return filePath.endsWith(pattern.slice(1));
+      return fileName.endsWith(pattern.slice(1));
     }
-    return filePath.includes(pattern);
+    return segments.includes(pattern);
   });
 }
 
 // src/cli/walker.ts
 var MAX_FILE_BYTES = 512 * 1024;
+var GIT_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024;
+var SCAN_ROOT_PATH = ".";
 var SCAN_EXTENSIONS = /* @__PURE__ */ new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".yml", ".yaml"]);
 var SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".next", "dist", "build", ".git", "coverage", ".turbo", ".vercel"]);
 function isEnvFile(name) {
@@ -86,13 +105,27 @@ function walkDirectory(dir) {
   }
   return results;
 }
+function toGitPath(relativePath) {
+  return relativePath.split(path.sep).join("/");
+}
+function findGitIgnored(dir, relativePaths) {
+  if (relativePaths.length === 0) return /* @__PURE__ */ new Set();
+  const result = spawnSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "-z", "--stdin"], {
+    cwd: dir,
+    input: [SCAN_ROOT_PATH, ...relativePaths.map(toGitPath)].join("\0"),
+    encoding: "utf-8",
+    maxBuffer: GIT_OUTPUT_LIMIT_BYTES
+  });
+  if (result.error || result.status !== 0) return /* @__PURE__ */ new Set();
+  const ignored = new Set(result.stdout.split("\0").filter(Boolean));
+  return ignored.has(SCAN_ROOT_PATH) ? /* @__PURE__ */ new Set() : ignored;
+}
 function buildFileChanges(dir) {
   const absoluteDir = path.resolve(dir);
-  const allPaths = walkDirectory(absoluteDir);
+  const candidates = walkDirectory(absoluteDir).map((absPath) => ({ absPath, relativePath: path.relative(absoluteDir, absPath) })).filter(({ relativePath }) => !shouldSkipFile(relativePath, DEFAULT_SCAN_LIMITS));
+  const gitIgnored = findGitIgnored(absoluteDir, candidates.map((candidate) => candidate.relativePath));
   const files = [];
-  for (const absPath of allPaths) {
-    const relativePath = path.relative(absoluteDir, absPath);
-    if (shouldSkipFile(relativePath, DEFAULT_SCAN_LIMITS)) continue;
+  for (const { absPath, relativePath } of candidates) {
     try {
       const stat = fs.statSync(absPath);
       if (stat.size > MAX_FILE_BYTES) continue;
@@ -103,7 +136,8 @@ function buildFileChanges(dir) {
         status: "added",
         content,
         additions: [{ start: 1, end: lineCount }],
-        deletions: []
+        deletions: [],
+        gitIgnored: gitIgnored.has(toGitPath(relativePath))
       });
     } catch {
     }
@@ -132,9 +166,26 @@ var SEVERITY_ORDER = {
   medium: 2,
   low: 1
 };
+var SEVERITY_LABEL_WIDTH = 10;
+var DETAIL_INDENT = " ".repeat(SEVERITY_LABEL_WIDTH + 2);
+var TERMINAL_WIDTH = 80;
 function severityLabel(severity) {
   const color = SEVERITY_COLORS[severity];
-  return `${color}${BOLD}${severity.toUpperCase().padEnd(8)}${RESET}`;
+  return `${color}${BOLD}${severity.toUpperCase().padEnd(SEVERITY_LABEL_WIDTH)}${RESET}`;
+}
+function wrapText(text, width) {
+  const lines = [];
+  let current = "";
+  for (const word of text.split(/\s+/)) {
+    if (current && current.length + 1 + word.length > width) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = current ? `${current} ${word}` : word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
 }
 function buildSeverityBreakdown(bySeverity) {
   const parts = [];
@@ -148,14 +199,18 @@ function formatTerminal(result, dir, version) {
   const lines = [];
   const { summary, findings, riskScore, riskLevel } = result;
   lines.push("");
-  lines.push(`${BOLD}CodeSentinel v${version}${RESET} ${DIM}\u2014 Preflight Security Gate${RESET}`);
+  lines.push(`${BOLD}CodeSentinel v${version}${RESET}  ${DIM}preflight security gate${RESET}`);
   lines.push("");
-  lines.push(`Scanning ${BOLD}${dir}${RESET}...`);
+  lines.push(`Scanning ${BOLD}${dir}${RESET}`);
   lines.push(`${GREEN}\u2713${RESET} ${summary.filesScanned} files scanned in ${summary.scanDurationMs}ms`);
+  if (summary.filesNotScanned > 0) {
+    const verb = summary.filesNotScanned === 1 ? "file was" : "files were";
+    lines.push(`${YELLOW}!${RESET} ${BOLD}Time limit reached:${RESET} ${summary.filesNotScanned} ${verb} not scanned`);
+  }
   lines.push(`${GREEN}\u2713${RESET} ${summary.rulesApplied} rules applied`);
   lines.push("");
   if (findings.length === 0) {
-    const boxContent = `  ${GREEN}\u2713${RESET} ${BOLD}No findings${RESET} \u2014 clean scan!`;
+    const boxContent = summary.filesNotScanned > 0 ? `  ${YELLOW}!${RESET} ${BOLD}No findings${RESET} in the files scanned` : `  ${GREEN}\u2713${RESET} ${BOLD}No findings${RESET}, clean scan`;
     const boxLine = "\u2500".repeat(45);
     lines.push(`\u250C${boxLine}\u2510`);
     lines.push(`\u2502${boxContent.padEnd(45 + countAnsiChars(boxContent))}\u2502`);
@@ -163,7 +218,7 @@ function formatTerminal(result, dir, version) {
   } else {
     const breakdown = buildSeverityBreakdown(summary.bySeverity);
     const riskColor = SEVERITY_COLORS[riskLevel] ?? YELLOW;
-    const findingsLine = `  \u2716 ${BOLD}${findings.length} findings${RESET} (${breakdown})`;
+    const findingsLine = `  \u2716 ${BOLD}${findings.length} ${findings.length === 1 ? "finding" : "findings"}${RESET} (${breakdown})`;
     const scoreLine = `  Risk Score: ${riskColor}${BOLD}${riskScore}/100 (${riskLevel.toUpperCase()})${RESET}`;
     const boxLine = "\u2500".repeat(45);
     lines.push(`\u250C${boxLine}\u2510`);
@@ -175,9 +230,13 @@ function formatTerminal(result, dir, version) {
       (a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity]
     );
     for (const finding of sorted) {
+      const fixLines = wrapText(finding.fixSuggestion, TERMINAL_WIDTH - DETAIL_INDENT.length - 2);
       lines.push(`  ${severityLabel(finding.severity)}${finding.title}`);
-      lines.push(`            ${DIM}${finding.filePath}:${finding.startLine}${RESET}`);
-      lines.push(`            ${DIM}\u2192 ${finding.fixSuggestion}${RESET}`);
+      lines.push(`${DETAIL_INDENT}${DIM}${finding.filePath}:${finding.startLine}  ${finding.ruleId}${RESET}`);
+      fixLines.forEach((fixLine, index) => {
+        const prefix = index === 0 ? "\u2192 " : "  ";
+        lines.push(`${DETAIL_INDENT}${DIM}${prefix}${fixLine}${RESET}`);
+      });
       lines.push("");
     }
   }
@@ -187,10 +246,18 @@ function formatJson(result) {
   return JSON.stringify(result, null, 2);
 }
 function formatFailMessage(failedCount, failSeverity) {
-  return `${RED}\u2716${RESET} Scan failed \u2014 ${failedCount} ${failSeverity}+ findings detected`;
+  const noun = failedCount === 1 ? "finding" : "findings";
+  return `${RED}\u2716${RESET} Scan failed: ${failedCount} blocking ${noun} at ${failSeverity} or above`;
 }
-function formatPassMessage() {
-  return `${GREEN}\u2713${RESET} Scan passed \u2014 no blocking findings detected`;
+function formatPassMessage(reportedCount = 0) {
+  const passed = `${GREEN}\u2713${RESET} Scan passed: no blocking findings`;
+  if (reportedCount === 0) return passed;
+  const hint = "Findings block only at high confidence (--fail-on low blocks on any finding).";
+  return `${passed} (${reportedCount} reported)
+  ${DIM}${hint}${RESET}`;
+}
+function formatIncompleteMessage() {
+  return `${RED}\u2716${RESET} Scan incomplete, not a pass. Raise the time limit with CODESENTINEL_SCAN_TIMEOUT_MS (milliseconds).`;
 }
 function countAnsiChars(str) {
   const ansiPattern = /\x1b\[[0-9;]*m/g;
@@ -204,6 +271,15 @@ function countAnsiChars(str) {
 function padVisible(str, width) {
   const ansiLen = countAnsiChars(str);
   return str.padEnd(width + ansiLen);
+}
+
+// src/cli/exit-code.ts
+var EXIT_BLOCKING = 1;
+var EXIT_INCOMPLETE = 3;
+function exitCodeFor(blockingCount, filesNotScanned) {
+  if (blockingCount > 0) return EXIT_BLOCKING;
+  if (filesNotScanned > 0) return EXIT_INCOMPLETE;
+  return 0;
 }
 
 // src/lib/scanner/file-classifier.ts
@@ -289,6 +365,9 @@ var KNOWN_EXAMPLE_JWTS = /* @__PURE__ */ new Set([
   // jwt.io canonical example (sub: "1234567890", name: "John Doe")
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ"
 ]);
+function withLeadingSlash(filePath) {
+  return filePath.startsWith("/") ? filePath : "/" + filePath;
+}
 function isExampleOrFixtureFile(filePath) {
   return EXAMPLE_FILE_PATTERNS.test(filePath) || FIXTURE_PATTERNS.test(filePath);
 }
@@ -333,8 +412,10 @@ var hardcodedSecretsRule = {
   run(file, classification) {
     const findings = [];
     if (classification.isTest) return findings;
-    if (isExampleOrFixtureFile(file.filePath)) return findings;
-    if (isAutogenDocsFile(file.filePath)) return findings;
+    if (file.gitIgnored) return findings;
+    const matchPath = withLeadingSlash(file.filePath);
+    if (isExampleOrFixtureFile(matchPath)) return findings;
+    if (isAutogenDocsFile(matchPath)) return findings;
     const lines = file.content.split("\n");
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -422,6 +503,7 @@ var envCommittedRule = {
     const isSafeFile = SAFE_ENV_PATTERNS.some((pattern) => file.filePath.endsWith(pattern));
     if (isSafeFile) return findings;
     if (file.status !== "added" && file.status !== "modified") return findings;
+    if (file.gitIgnored) return findings;
     if (!hasRealSecrets(file.content)) return findings;
     const snippet = file.filePath;
     findings.push({
@@ -435,7 +517,7 @@ var envCommittedRule = {
       fixSuggestion: "Add this file to `.gitignore` and use `.env.example` with placeholder values instead.",
       filePath: file.filePath,
       startLine: 1,
-      endLine: file.content.split("\n").length,
+      endLine: file.content.replace(/\r?\n$/, "").split("\n").length,
       snippet,
       fingerprint: createFingerprint("env-committed", file.filePath, snippet)
     });
@@ -487,7 +569,7 @@ var nextPublicSecretRule = {
         title: "Secret exposed via NEXT_PUBLIC_ prefix",
         description: `The environment variable on line ${lineNumber} uses the \`NEXT_PUBLIC_\` prefix, which exposes its value to client-side JavaScript bundles.`,
         explanation: "Variables prefixed with `NEXT_PUBLIC_` are inlined into the client-side JavaScript bundle at build time. Secrets, keys, tokens, and passwords should never use this prefix as they will be visible to anyone inspecting the browser JavaScript.",
-        fixSuggestion: "Remove the `NEXT_PUBLIC_` prefix \u2014 secrets should only be available server-side. Use a server action or API route to access this value.",
+        fixSuggestion: "Remove the `NEXT_PUBLIC_` prefix so the secret stays server-side. Use a server action or API route to access this value.",
         filePath: file.filePath,
         startLine: lineNumber,
         endLine: lineNumber,
@@ -711,7 +793,7 @@ async function runScan(files, mutedRuleIds = [], limits = DEFAULT_SCAN_LIMITS) {
   let filesScanned = 0;
   const filesToScan = files.filter((f) => f.status !== "deleted").filter((f) => !shouldSkipFile(f.filePath, limits)).filter((f) => Buffer.byteLength(f.content, "utf-8") <= limits.maxBytesPerFile).slice(0, limits.maxFilesPerScan);
   for (const file of filesToScan) {
-    if (Date.now() - startTime > limits.scanTimeoutMs) {
+    if (Date.now() - startTime >= limits.scanTimeoutMs) {
       logger.warn({ filesScanned, totalFiles: filesToScan.length }, "Scan timeout reached");
       break;
     }
@@ -749,6 +831,7 @@ async function runScan(files, mutedRuleIds = [], limits = DEFAULT_SCAN_LIMITS) {
       totalFindings: dedupedFindings.length,
       bySeverity,
       filesScanned,
+      filesNotScanned: filesToScan.length - filesScanned,
       rulesApplied: rulesApplied.size,
       scanDurationMs: scanDuration
     }
@@ -756,9 +839,7 @@ async function runScan(files, mutedRuleIds = [], limits = DEFAULT_SCAN_LIMITS) {
 }
 
 // src/cli/index.ts
-if (!process.argv.includes("--verbose")) {
-  process.env.LOG_LEVEL = "silent";
-}
+process.env.LOG_LEVEL = "silent";
 var VERSION = "0.1.0";
 var SEVERITY_ORDER3 = {
   critical: 4,
@@ -798,7 +879,6 @@ function parseArgs(argv) {
       }
       options.failOn = value;
     } else if (arg === "--") {
-    } else if (arg === "--verbose") {
     } else if (arg.startsWith("--")) {
       process.stderr.write(`Unknown option: ${arg}
 `);
@@ -812,9 +892,14 @@ function parseArgs(argv) {
   }
   return options;
 }
+function displayPath(absoluteDir) {
+  const relativeDir = path2.relative(process.cwd(), absoluteDir);
+  if (relativeDir.startsWith("..") || path2.isAbsolute(relativeDir)) return absoluteDir;
+  return relativeDir || ".";
+}
 function printHelp() {
   const help = `
-CodeSentinel v${VERSION} \u2014 Preflight Security Gate
+CodeSentinel v${VERSION}, preflight security gate
 
 Usage:
   codesentinel scan [directory]    Scan a directory for security issues
@@ -824,8 +909,14 @@ Usage:
 Options:
   --json              Output results as JSON
   --fail-on <level>   Fail threshold: critical, high, medium, low (default: high)
+                      Only high-confidence findings block, except with low
   --quiet             Suppress output, exit code only
-  --verbose           Show scanner debug logs
+
+Exit codes:
+  0  scan finished, no blocking findings
+  1  blocking findings
+  2  usage error
+  3  scan incomplete: the time limit (CODESENTINEL_SCAN_TIMEOUT_MS) cut it short
 
 Examples:
   codesentinel scan .
@@ -870,23 +961,26 @@ async function main() {
     process.exit(2);
   }
   const files = buildFileChanges(absoluteDir);
-  const result = await runScan(files, []);
+  const result = await runScan(files, [], directoryScanLimits());
   if (options.json && !options.quiet) {
     process.stdout.write(formatJson(result) + "\n");
   } else if (!options.quiet) {
-    process.stdout.write(formatTerminal(result, absoluteDir, VERSION) + "\n");
+    process.stdout.write(formatTerminal(result, displayPath(absoluteDir), VERSION) + "\n");
   }
   const failCount = shouldFail(result.findings, options.failOn);
+  const exitCode = exitCodeFor(failCount, result.summary.filesNotScanned);
   if (!options.quiet && !options.json) {
     if (failCount > 0) {
       process.stdout.write(formatFailMessage(failCount, options.failOn) + "\n");
+    } else if (result.summary.filesNotScanned > 0) {
+      process.stdout.write(formatIncompleteMessage() + "\n");
     } else {
-      process.stdout.write(formatPassMessage() + "\n");
+      process.stdout.write(formatPassMessage(result.findings.length) + "\n");
     }
     process.stdout.write("\n");
   }
-  if (failCount > 0) {
-    process.exit(1);
+  if (exitCode !== 0) {
+    process.exit(exitCode);
   }
 }
 main().catch((err) => {

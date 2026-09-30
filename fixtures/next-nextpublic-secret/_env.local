@@ -1,0 +1,6 @@
+# Fixture values are fake. {{...}} placeholders are filled in when the fixture is scanned.
+NEXT_PUBLIC_SUPABASE_URL=https://abcdefghijklmnop.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY={{supabase-anon-jwt}}
+NEXT_PUBLIC_OPENAI_API_KEY={{openai-key}}
+NEXT_PUBLIC_ADMIN_PASSWORD=correct-horse-battery-staple
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_abcdefghijklmnopqrstuvwx

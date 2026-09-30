@@ -5,6 +5,7 @@ import * as fs2 from "node:fs";
 // src/cli/walker.ts
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 
 // src/lib/scan-limits.ts
 var DEFAULT_SCAN_LIMITS = {
@@ -45,17 +46,35 @@ var DEFAULT_SCAN_LIMITS = {
     "*.gz"
   ]
 };
+var SCAN_TIMEOUT_ENV = "CODESENTINEL_SCAN_TIMEOUT_MS";
+function scanTimeoutFromEnv(env) {
+  const raw = env[SCAN_TIMEOUT_ENV];
+  if (raw === void 0 || raw === "") return DEFAULT_SCAN_LIMITS.scanTimeoutMs;
+  if (!/^\d+$/.test(raw)) throw new Error(`${SCAN_TIMEOUT_ENV} must be a whole number of milliseconds, got "${raw}"`);
+  return Number(raw);
+}
+function directoryScanLimits(env = process.env) {
+  return {
+    ...DEFAULT_SCAN_LIMITS,
+    maxFilesPerScan: Number.POSITIVE_INFINITY,
+    scanTimeoutMs: scanTimeoutFromEnv(env)
+  };
+}
 function shouldSkipFile(filePath, limits = DEFAULT_SCAN_LIMITS) {
+  const segments = filePath.split(/[\\/]/);
+  const fileName = segments[segments.length - 1];
   return limits.skipPatterns.some((pattern) => {
     if (pattern.startsWith("*.")) {
-      return filePath.endsWith(pattern.slice(1));
+      return fileName.endsWith(pattern.slice(1));
     }
-    return filePath.includes(pattern);
+    return segments.includes(pattern);
   });
 }
 
 // src/cli/walker.ts
 var MAX_FILE_BYTES = 512 * 1024;
+var GIT_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024;
+var SCAN_ROOT_PATH = ".";
 var SCAN_EXTENSIONS = /* @__PURE__ */ new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".yml", ".yaml"]);
 var SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".next", "dist", "build", ".git", "coverage", ".turbo", ".vercel"]);
 function isEnvFile(name) {
@@ -84,13 +103,27 @@ function walkDirectory(dir) {
   }
   return results;
 }
+function toGitPath(relativePath) {
+  return relativePath.split(path.sep).join("/");
+}
+function findGitIgnored(dir, relativePaths) {
+  if (relativePaths.length === 0) return /* @__PURE__ */ new Set();
+  const result = spawnSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "-z", "--stdin"], {
+    cwd: dir,
+    input: [SCAN_ROOT_PATH, ...relativePaths.map(toGitPath)].join("\0"),
+    encoding: "utf-8",
+    maxBuffer: GIT_OUTPUT_LIMIT_BYTES
+  });
+  if (result.error || result.status !== 0) return /* @__PURE__ */ new Set();
+  const ignored = new Set(result.stdout.split("\0").filter(Boolean));
+  return ignored.has(SCAN_ROOT_PATH) ? /* @__PURE__ */ new Set() : ignored;
+}
 function buildFileChanges(dir) {
   const absoluteDir = path.resolve(dir);
-  const allPaths = walkDirectory(absoluteDir);
+  const candidates = walkDirectory(absoluteDir).map((absPath) => ({ absPath, relativePath: path.relative(absoluteDir, absPath) })).filter(({ relativePath }) => !shouldSkipFile(relativePath, DEFAULT_SCAN_LIMITS));
+  const gitIgnored = findGitIgnored(absoluteDir, candidates.map((candidate) => candidate.relativePath));
   const files = [];
-  for (const absPath of allPaths) {
-    const relativePath = path.relative(absoluteDir, absPath);
-    if (shouldSkipFile(relativePath, DEFAULT_SCAN_LIMITS)) continue;
+  for (const { absPath, relativePath } of candidates) {
     try {
       const stat = fs.statSync(absPath);
       if (stat.size > MAX_FILE_BYTES) continue;
@@ -101,12 +134,22 @@ function buildFileChanges(dir) {
         status: "added",
         content,
         additions: [{ start: 1, end: lineCount }],
-        deletions: []
+        deletions: [],
+        gitIgnored: gitIgnored.has(toGitPath(relativePath))
       });
     } catch {
     }
   }
   return files;
+}
+
+// src/cli/exit-code.ts
+var EXIT_BLOCKING = 1;
+var EXIT_INCOMPLETE = 3;
+function exitCodeFor(blockingCount, filesNotScanned) {
+  if (blockingCount > 0) return EXIT_BLOCKING;
+  if (filesNotScanned > 0) return EXIT_INCOMPLETE;
+  return 0;
 }
 
 // src/lib/scanner/file-classifier.ts
@@ -192,6 +235,9 @@ var KNOWN_EXAMPLE_JWTS = /* @__PURE__ */ new Set([
   // jwt.io canonical example (sub: "1234567890", name: "John Doe")
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ"
 ]);
+function withLeadingSlash(filePath) {
+  return filePath.startsWith("/") ? filePath : "/" + filePath;
+}
 function isExampleOrFixtureFile(filePath) {
   return EXAMPLE_FILE_PATTERNS.test(filePath) || FIXTURE_PATTERNS.test(filePath);
 }
@@ -236,8 +282,10 @@ var hardcodedSecretsRule = {
   run(file, classification) {
     const findings = [];
     if (classification.isTest) return findings;
-    if (isExampleOrFixtureFile(file.filePath)) return findings;
-    if (isAutogenDocsFile(file.filePath)) return findings;
+    if (file.gitIgnored) return findings;
+    const matchPath = withLeadingSlash(file.filePath);
+    if (isExampleOrFixtureFile(matchPath)) return findings;
+    if (isAutogenDocsFile(matchPath)) return findings;
     const lines = file.content.split("\n");
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -325,6 +373,7 @@ var envCommittedRule = {
     const isSafeFile = SAFE_ENV_PATTERNS.some((pattern) => file.filePath.endsWith(pattern));
     if (isSafeFile) return findings;
     if (file.status !== "added" && file.status !== "modified") return findings;
+    if (file.gitIgnored) return findings;
     if (!hasRealSecrets(file.content)) return findings;
     const snippet = file.filePath;
     findings.push({
@@ -338,7 +387,7 @@ var envCommittedRule = {
       fixSuggestion: "Add this file to `.gitignore` and use `.env.example` with placeholder values instead.",
       filePath: file.filePath,
       startLine: 1,
-      endLine: file.content.split("\n").length,
+      endLine: file.content.replace(/\r?\n$/, "").split("\n").length,
       snippet,
       fingerprint: createFingerprint("env-committed", file.filePath, snippet)
     });
@@ -390,7 +439,7 @@ var nextPublicSecretRule = {
         title: "Secret exposed via NEXT_PUBLIC_ prefix",
         description: `The environment variable on line ${lineNumber} uses the \`NEXT_PUBLIC_\` prefix, which exposes its value to client-side JavaScript bundles.`,
         explanation: "Variables prefixed with `NEXT_PUBLIC_` are inlined into the client-side JavaScript bundle at build time. Secrets, keys, tokens, and passwords should never use this prefix as they will be visible to anyone inspecting the browser JavaScript.",
-        fixSuggestion: "Remove the `NEXT_PUBLIC_` prefix \u2014 secrets should only be available server-side. Use a server action or API route to access this value.",
+        fixSuggestion: "Remove the `NEXT_PUBLIC_` prefix so the secret stays server-side. Use a server action or API route to access this value.",
         filePath: file.filePath,
         startLine: lineNumber,
         endLine: lineNumber,
@@ -614,7 +663,7 @@ async function runScan(files, mutedRuleIds = [], limits = DEFAULT_SCAN_LIMITS) {
   let filesScanned = 0;
   const filesToScan = files.filter((f) => f.status !== "deleted").filter((f) => !shouldSkipFile(f.filePath, limits)).filter((f) => Buffer.byteLength(f.content, "utf-8") <= limits.maxBytesPerFile).slice(0, limits.maxFilesPerScan);
   for (const file of filesToScan) {
-    if (Date.now() - startTime > limits.scanTimeoutMs) {
+    if (Date.now() - startTime >= limits.scanTimeoutMs) {
       logger.warn({ filesScanned, totalFiles: filesToScan.length }, "Scan timeout reached");
       break;
     }
@@ -652,6 +701,7 @@ async function runScan(files, mutedRuleIds = [], limits = DEFAULT_SCAN_LIMITS) {
       totalFindings: dedupedFindings.length,
       bySeverity,
       filesScanned,
+      filesNotScanned: filesToScan.length - filesScanned,
       rulesApplied: rulesApplied.size,
       scanDurationMs: scanDuration
     }
@@ -716,16 +766,28 @@ async function main() {
     process.exit(2);
   }
   const files = buildFileChanges(absoluteDir);
-  const result = await runScan(files, []);
+  const result = await runScan(files, [], directoryScanLimits());
   const sorted = [...result.findings].sort(
     (a, b) => SEVERITY_ORDER2[b.severity] - SEVERITY_ORDER2[a.severity]
   );
   for (const finding of sorted) {
     emitAnnotation(finding);
   }
+  const { filesNotScanned } = result.summary;
+  if (filesNotScanned > 0) {
+    const verb = filesNotScanned === 1 ? "file was" : "files were";
+    process.stdout.write(
+      `::warning::CodeSentinel scan incomplete: ${filesNotScanned} ${verb} not scanned because the time limit was reached.
+`
+    );
+  }
   process.stdout.write("::group::CodeSentinel Scan Summary\n");
   process.stdout.write(`Files scanned: ${result.summary.filesScanned}
 `);
+  if (filesNotScanned > 0) {
+    process.stdout.write(`Files not scanned: ${filesNotScanned}
+`);
+  }
   process.stdout.write(`Rules applied: ${result.summary.rulesApplied}
 `);
   process.stdout.write(`Scan duration: ${result.summary.scanDurationMs}ms
@@ -761,15 +823,22 @@ async function main() {
 `);
   }
   const blockingCount = shouldFail(result.findings, failOn);
+  const exitCode = exitCodeFor(blockingCount, filesNotScanned);
   if (blockingCount > 0) {
     process.stdout.write(
       `
 ::error::CodeSentinel found ${blockingCount} blocking finding(s) at ${failOn}+ severity. Scan failed.
 `
     );
-    process.exit(1);
+    process.exit(exitCode);
   }
-  process.stdout.write("\nCodeSentinel scan passed \u2014 no blocking findings.\n");
+  if (filesNotScanned > 0) {
+    process.stdout.write(
+      "\n::error::CodeSentinel scan incomplete, not a pass. Raise the time limit with CODESENTINEL_SCAN_TIMEOUT_MS (milliseconds).\n"
+    );
+    process.exit(exitCode);
+  }
+  process.stdout.write("\nCodeSentinel scan passed: no blocking findings.\n");
 }
 main().catch((err) => {
   process.stdout.write(

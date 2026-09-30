@@ -1,0 +1,13 @@
+{
+  "fixture": "next-supabase-service-key-client",
+  "findings": [
+    {
+      "rule_id": "supabase-service-key-client",
+      "severity": "critical",
+      "confidence": "high",
+      "file": "app/page.tsx",
+      "start_line": 7,
+      "end_line": 7
+    }
+  ]
+}

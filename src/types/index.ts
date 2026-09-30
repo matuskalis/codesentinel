@@ -25,6 +25,7 @@ export interface FileChange {
   patch?: string
   additions: LineRange[]
   deletions: LineRange[]
+  gitIgnored?: boolean
 }
 
 export interface LineRange {
@@ -79,6 +80,7 @@ export interface ScanSummary {
   totalFindings: number
   bySeverity: Record<Severity, number>
   filesScanned: number
+  filesNotScanned: number
   rulesApplied: number
   scanDurationMs: number
 }

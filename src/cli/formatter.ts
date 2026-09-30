@@ -23,9 +23,28 @@ const SEVERITY_ORDER: Record<Severity, number> = {
   low: 1,
 }
 
+const SEVERITY_LABEL_WIDTH = 10
+const DETAIL_INDENT = ' '.repeat(SEVERITY_LABEL_WIDTH + 2)
+const TERMINAL_WIDTH = 80
+
 function severityLabel(severity: Severity): string {
   const color = SEVERITY_COLORS[severity]
-  return `${color}${BOLD}${severity.toUpperCase().padEnd(8)}${RESET}`
+  return `${color}${BOLD}${severity.toUpperCase().padEnd(SEVERITY_LABEL_WIDTH)}${RESET}`
+}
+
+function wrapText(text: string, width: number): string[] {
+  const lines: string[] = []
+  let current = ''
+  for (const word of text.split(/\s+/)) {
+    if (current && current.length + 1 + word.length > width) {
+      lines.push(current)
+      current = word
+    } else {
+      current = current ? `${current} ${word}` : word
+    }
+  }
+  if (current) lines.push(current)
+  return lines
 }
 
 function buildSeverityBreakdown(bySeverity: Record<Severity, number>): string {
@@ -42,15 +61,22 @@ export function formatTerminal(result: ScanResult, dir: string, version: string)
   const { summary, findings, riskScore, riskLevel } = result
 
   lines.push('')
-  lines.push(`${BOLD}CodeSentinel v${version}${RESET} ${DIM}— Preflight Security Gate${RESET}`)
+  lines.push(`${BOLD}CodeSentinel v${version}${RESET}  ${DIM}preflight security gate${RESET}`)
   lines.push('')
-  lines.push(`Scanning ${BOLD}${dir}${RESET}...`)
+  lines.push(`Scanning ${BOLD}${dir}${RESET}`)
   lines.push(`${GREEN}\u2713${RESET} ${summary.filesScanned} files scanned in ${summary.scanDurationMs}ms`)
+  if (summary.filesNotScanned > 0) {
+    const verb = summary.filesNotScanned === 1 ? 'file was' : 'files were'
+    lines.push(`${YELLOW}!${RESET} ${BOLD}Time limit reached:${RESET} ${summary.filesNotScanned} ${verb} not scanned`)
+  }
   lines.push(`${GREEN}\u2713${RESET} ${summary.rulesApplied} rules applied`)
   lines.push('')
 
   if (findings.length === 0) {
-    const boxContent = `  ${GREEN}\u2713${RESET} ${BOLD}No findings${RESET} — clean scan!`
+    const boxContent =
+      summary.filesNotScanned > 0
+        ? `  ${YELLOW}!${RESET} ${BOLD}No findings${RESET} in the files scanned`
+        : `  ${GREEN}\u2713${RESET} ${BOLD}No findings${RESET}, clean scan`
     const boxLine = '\u2500'.repeat(45)
     lines.push(`\u250C${boxLine}\u2510`)
     lines.push(`\u2502${boxContent.padEnd(45 + countAnsiChars(boxContent))}\u2502`)
@@ -58,7 +84,7 @@ export function formatTerminal(result: ScanResult, dir: string, version: string)
   } else {
     const breakdown = buildSeverityBreakdown(summary.bySeverity)
     const riskColor = SEVERITY_COLORS[riskLevel] ?? YELLOW
-    const findingsLine = `  \u2716 ${BOLD}${findings.length} findings${RESET} (${breakdown})`
+    const findingsLine = `  \u2716 ${BOLD}${findings.length} ${findings.length === 1 ? 'finding' : 'findings'}${RESET} (${breakdown})`
     const scoreLine = `  Risk Score: ${riskColor}${BOLD}${riskScore}/100 (${riskLevel.toUpperCase()})${RESET}`
     const boxLine = '\u2500'.repeat(45)
 
@@ -73,9 +99,13 @@ export function formatTerminal(result: ScanResult, dir: string, version: string)
     )
 
     for (const finding of sorted) {
+      const fixLines = wrapText(finding.fixSuggestion, TERMINAL_WIDTH - DETAIL_INDENT.length - 2)
       lines.push(`  ${severityLabel(finding.severity)}${finding.title}`)
-      lines.push(`            ${DIM}${finding.filePath}:${finding.startLine}${RESET}`)
-      lines.push(`            ${DIM}\u2192 ${finding.fixSuggestion}${RESET}`)
+      lines.push(`${DETAIL_INDENT}${DIM}${finding.filePath}:${finding.startLine}  ${finding.ruleId}${RESET}`)
+      fixLines.forEach((fixLine, index) => {
+        const prefix = index === 0 ? '\u2192 ' : '  '
+        lines.push(`${DETAIL_INDENT}${DIM}${prefix}${fixLine}${RESET}`)
+      })
       lines.push('')
     }
   }
@@ -88,11 +118,20 @@ export function formatJson(result: ScanResult): string {
 }
 
 export function formatFailMessage(failedCount: number, failSeverity: string): string {
-  return `${RED}\u2716${RESET} Scan failed \u2014 ${failedCount} ${failSeverity}+ findings detected`
+  const noun = failedCount === 1 ? 'finding' : 'findings'
+  return `${RED}\u2716${RESET} Scan failed: ${failedCount} blocking ${noun} at ${failSeverity} or above`
 }
 
-export function formatPassMessage(): string {
-  return `${GREEN}\u2713${RESET} Scan passed \u2014 no blocking findings detected`
+export function formatPassMessage(reportedCount = 0): string {
+  const passed = `${GREEN}\u2713${RESET} Scan passed: no blocking findings`
+  if (reportedCount === 0) return passed
+
+  const hint = 'Findings block only at high confidence (--fail-on low blocks on any finding).'
+  return `${passed} (${reportedCount} reported)\n  ${DIM}${hint}${RESET}`
+}
+
+export function formatIncompleteMessage(): string {
+  return `${RED}\u2716${RESET} Scan incomplete, not a pass. Raise the time limit with CODESENTINEL_SCAN_TIMEOUT_MS (milliseconds).`
 }
 
 function countAnsiChars(str: string): number {

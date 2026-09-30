@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { Shield, GitPullRequest, AlertTriangle, Zap } from 'lucide-react'
+import { allRules } from '@/lib/rules'
 
 export default function HomePage() {
   return (
@@ -11,8 +12,8 @@ export default function HomePage() {
         </div>
         <p className="mb-8 max-w-2xl text-xl text-muted-foreground">
           Automated security scanning for your GitHub repositories. Catch
-          secrets, injection vulnerabilities, and misconfigurations before they
-          ship.
+          hardcoded secrets, leaked environment variables, and
+          misconfigurations before they ship.
         </p>
         <Link
           href="/api/auth/github"
@@ -27,10 +28,13 @@ export default function HomePage() {
         <div className="grid grid-cols-1 gap-8 md:grid-cols-3">
           <div className="rounded-lg border border-border bg-card p-6">
             <AlertTriangle className="mb-4 h-8 w-8 text-severity-high" />
-            <h3 className="mb-2 text-lg font-semibold">12 Security Rules</h3>
+            <h3 className="mb-2 text-lg font-semibold">
+              {allRules.length} Security Rules
+            </h3>
             <p className="text-sm text-muted-foreground">
-              Detects hardcoded secrets, SQL injection, XSS, insecure cookies,
-              exposed service keys, and more.
+              Detects hardcoded secrets, committed .env files, secrets behind
+              NEXT_PUBLIC_, Stripe webhooks without signature checks, and
+              Supabase service keys in client code.
             </p>
           </div>
           <div className="rounded-lg border border-border bg-card p-6">

@@ -65,6 +65,7 @@ export const envCommittedRule: RuleDefinition = {
     if (isSafeFile) return findings
 
     if (file.status !== 'added' && file.status !== 'modified') return findings
+    if (file.gitIgnored) return findings
 
     if (!hasRealSecrets(file.content)) return findings
 
@@ -80,7 +81,7 @@ export const envCommittedRule: RuleDefinition = {
       fixSuggestion: 'Add this file to `.gitignore` and use `.env.example` with placeholder values instead.',
       filePath: file.filePath,
       startLine: 1,
-      endLine: file.content.split('\n').length,
+      endLine: file.content.replace(/\r?\n$/, '').split('\n').length,
       snippet,
       fingerprint: createFingerprint('env-committed', file.filePath, snippet),
     })

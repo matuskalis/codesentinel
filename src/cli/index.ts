@@ -1,13 +1,12 @@
-// Suppress pino logger output in CLI mode unless verbose
-if (!process.argv.includes('--verbose')) {
-  process.env.LOG_LEVEL = 'silent'
-}
+process.env.LOG_LEVEL = 'silent'
 
 import * as path from 'node:path'
 import * as fs from 'node:fs'
 import { buildFileChanges } from './walker.js'
-import { formatTerminal, formatJson, formatFailMessage, formatPassMessage } from './formatter.js'
+import { formatTerminal, formatJson, formatFailMessage, formatPassMessage, formatIncompleteMessage } from './formatter.js'
+import { exitCodeFor } from './exit-code.js'
 import { runScan } from '@/lib/scanner'
+import { directoryScanLimits } from '@/lib/scan-limits'
 import type { Severity } from '@/types'
 
 const VERSION = '0.1.0'
@@ -63,8 +62,6 @@ function parseArgs(argv: string[]): CliOptions {
       options.failOn = value as Severity
     } else if (arg === '--') {
       // Skip separator
-    } else if (arg === '--verbose') {
-      // Already handled before imports
     } else if (arg.startsWith('--')) {
       process.stderr.write(`Unknown option: ${arg}\n`)
       process.exit(2)
@@ -80,9 +77,15 @@ function parseArgs(argv: string[]): CliOptions {
   return options
 }
 
+function displayPath(absoluteDir: string): string {
+  const relativeDir = path.relative(process.cwd(), absoluteDir)
+  if (relativeDir.startsWith('..') || path.isAbsolute(relativeDir)) return absoluteDir
+  return relativeDir || '.'
+}
+
 function printHelp(): void {
   const help = `
-CodeSentinel v${VERSION} — Preflight Security Gate
+CodeSentinel v${VERSION}, preflight security gate
 
 Usage:
   codesentinel scan [directory]    Scan a directory for security issues
@@ -92,8 +95,14 @@ Usage:
 Options:
   --json              Output results as JSON
   --fail-on <level>   Fail threshold: critical, high, medium, low (default: high)
+                      Only high-confidence findings block, except with low
   --quiet             Suppress output, exit code only
-  --verbose           Show scanner debug logs
+
+Exit codes:
+  0  scan finished, no blocking findings
+  1  blocking findings
+  2  usage error
+  3  scan incomplete: the time limit (CODESENTINEL_SCAN_TIMEOUT_MS) cut it short
 
 Examples:
   codesentinel scan .
@@ -147,27 +156,30 @@ async function main(): Promise<void> {
   }
 
   const files = buildFileChanges(absoluteDir)
-  const result = await runScan(files, [])
+  const result = await runScan(files, [], directoryScanLimits())
 
   if (options.json && !options.quiet) {
     process.stdout.write(formatJson(result) + '\n')
   } else if (!options.quiet) {
-    process.stdout.write(formatTerminal(result, absoluteDir, VERSION) + '\n')
+    process.stdout.write(formatTerminal(result, displayPath(absoluteDir), VERSION) + '\n')
   }
 
   const failCount = shouldFail(result.findings, options.failOn)
+  const exitCode = exitCodeFor(failCount, result.summary.filesNotScanned)
 
   if (!options.quiet && !options.json) {
     if (failCount > 0) {
       process.stdout.write(formatFailMessage(failCount, options.failOn) + '\n')
+    } else if (result.summary.filesNotScanned > 0) {
+      process.stdout.write(formatIncompleteMessage() + '\n')
     } else {
-      process.stdout.write(formatPassMessage() + '\n')
+      process.stdout.write(formatPassMessage(result.findings.length) + '\n')
     }
     process.stdout.write('\n')
   }
 
-  if (failCount > 0) {
-    process.exit(1)
+  if (exitCode !== 0) {
+    process.exit(exitCode)
   }
 }
 

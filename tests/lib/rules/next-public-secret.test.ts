@@ -20,6 +20,18 @@ describe('next-public-secret', () => {
     })
   })
 
+  describe('git-ignored env files', () => {
+    it('should still flag a NEXT_PUBLIC_ secret, because the value reaches the client bundle either way', () => {
+      const file = makeFileChange({
+        filePath: '.env.local',
+        content: 'NEXT_PUBLIC_SECRET_KEY=real_secret_value_here',
+        gitIgnored: true,
+      })
+
+      expect(nextPublicSecretRule.run(file, classification).length).toBe(1)
+    })
+  })
+
   describe('detection', () => {
     it('should detect NEXT_PUBLIC_ with SECRET suffix', () => {
       const file = makeFileChange({

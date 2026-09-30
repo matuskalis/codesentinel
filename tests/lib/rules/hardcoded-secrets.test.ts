@@ -137,6 +137,54 @@ describe('hardcoded-secrets', () => {
       expect(findings.length).toBe(0)
     })
 
+    it('should not flag a file that .gitignore keeps out of the repository', () => {
+      const file = makeFileChange({
+        filePath: '.env.local',
+        content: `STRIPE_SECRET_KEY=${FAKE_SK_LIVE}`,
+        gitIgnored: true,
+      })
+
+      const findings = hardcodedSecretsRule.run(file, makeClassification({ filePath: '.env.local', language: 'env' }))
+      expect(findings.length).toBe(0)
+    })
+
+    it.each([
+      'fixtures/keys.ts',
+      'src/fixtures/keys.ts',
+      '__fixtures__/keys.ts',
+      'src/__fixtures__/keys.ts',
+      'snapshots/keys.ts',
+      'src/keys.snap',
+      'src/keys.fixture.ts',
+      'config.sample.json',
+      'config.example.ts',
+      'openapi.json',
+      'docs/openapi.json',
+      'swagger.json',
+      'public/documentation/schema.json',
+    ])('should not flag example, fixture or generated docs file %s', filePath => {
+      const file = makeFileChange({
+        filePath,
+        content: `const stripeKey = "${FAKE_SK_LIVE}"`,
+      })
+
+      const findings = hardcodedSecretsRule.run(file, makeClassification({ filePath }))
+      expect(findings.length).toBe(0)
+    })
+
+    it.each(['src/lib/fixtures-loader.ts', 'src/lib/openapi-client.ts', 'src/snapshots.ts'])(
+      'should still flag %s, whose name only resembles a fixture or docs path',
+      filePath => {
+        const file = makeFileChange({
+          filePath,
+          content: `const stripeKey = "${FAKE_SK_LIVE}"`,
+        })
+
+        const findings = hardcodedSecretsRule.run(file, makeClassification({ filePath }))
+        expect(findings.length).toBe(1)
+      }
+    )
+
     it('should not flag test files', () => {
       const file = makeFileChange({
         filePath: 'src/lib/api-client.test.ts',

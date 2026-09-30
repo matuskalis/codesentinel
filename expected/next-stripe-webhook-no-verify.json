@@ -1,0 +1,13 @@
+{
+  "fixture": "next-stripe-webhook-no-verify",
+  "findings": [
+    {
+      "rule_id": "stripe-no-webhook-verify",
+      "severity": "high",
+      "confidence": "medium",
+      "file": "app/api/stripe/webhook/route.ts",
+      "start_line": 1,
+      "end_line": 1
+    }
+  ]
+}
