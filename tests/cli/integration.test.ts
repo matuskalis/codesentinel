@@ -9,6 +9,12 @@ const FAKE_SK_LIVE = `sk_live_${'TESTKEY00000000000000000000'}`
 const FAKE_SK_TEST = `sk_test_${'TESTKEY00000000000000000000'}`
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '../..')
+const SUPABASE_FIXTURE = path.join(PROJECT_ROOT, 'fixtures', 'next-supabase-service-key-client')
+const STRIPE_FIXTURE = path.join(PROJECT_ROOT, 'fixtures', 'next-stripe-webhook-no-verify')
+
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*m/g, '')
+}
 
 let dirtyDir: string
 let cleanDir: string
@@ -158,6 +164,40 @@ describe('CLI integration', () => {
     })
   })
 
+  describe('fixtures', () => {
+    it('should name the rule, file and line of a finding in terminal output', () => {
+      const { stdout, exitCode } = runCli(`scan ${SUPABASE_FIXTURE}`)
+      const output = stripAnsi(stdout)
+
+      expect(exitCode).toBe(1)
+      expect(output).toMatch(/CRITICAL {2,}Supabase service role key used in client code/)
+      expect(output).toContain('app/page.tsx:7  supabase-service-key-client')
+      expect(output).toContain('Scan failed: 1 blocking finding at high or above')
+    })
+
+    it('should show the scanned directory relative to where the command runs', () => {
+      const { stdout } = runCli('scan fixtures/next-supabase-service-key-client')
+
+      expect(stripAnsi(stdout)).toContain('Scanning fixtures/next-supabase-service-key-client\n')
+    })
+
+    it('should show the absolute path when the directory is outside the working directory', () => {
+      const { stdout } = runCli(`scan ${cleanDir}`)
+
+      expect(stripAnsi(stdout)).toContain(`Scanning ${cleanDir}\n`)
+    })
+
+    it('should give identical findings on every run', () => {
+      const findingsOf = (stdout: string) => JSON.parse(stdout).findings
+
+      const first = findingsOf(runCli(`scan ${SUPABASE_FIXTURE} --json`).stdout)
+      const second = findingsOf(runCli(`scan ${SUPABASE_FIXTURE} --json`).stdout)
+
+      expect(first).toHaveLength(1)
+      expect(second).toEqual(first)
+    })
+  })
+
   describe('git-ignored env files', () => {
     it('should not call a git-ignored .env.local committed, but still flag NEXT_PUBLIC_ secrets in it', () => {
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codesentinel-ignored-'))
@@ -216,6 +256,25 @@ describe('CLI integration', () => {
     })
   })
 
+  describe('medium-confidence findings', () => {
+    it('should report a high-severity finding without failing at --fail-on high', () => {
+      const { stdout, exitCode } = runCli(`scan ${STRIPE_FIXTURE} --fail-on high`)
+      const output = stripAnsi(stdout)
+
+      expect(exitCode).toBe(0)
+      expect(output).toContain('HIGH')
+      expect(output).toContain('stripe-no-webhook-verify')
+      expect(output).toContain('Scan passed: no blocking findings (1 reported)')
+      expect(output).toContain('Findings block only at high confidence')
+    })
+
+    it('should fail on it with --fail-on low', () => {
+      const { exitCode } = runCli(`scan ${STRIPE_FIXTURE} --fail-on low`)
+
+      expect(exitCode).toBe(1)
+    })
+  })
+
   describe('--help flag', () => {
     it('should print usage information', () => {
       const { stdout, exitCode } = runCli('--help')
@@ -225,12 +284,20 @@ describe('CLI integration', () => {
       expect(stdout).toContain('codesentinel scan')
     })
 
-    it('should list available options', () => {
+    it('should list available options and exit codes', () => {
       const { stdout } = runCli('--help')
 
       expect(stdout).toContain('--json')
       expect(stdout).toContain('--fail-on')
       expect(stdout).toContain('--quiet')
+      expect(stdout).toContain('Exit codes')
+      expect(stdout).not.toContain('--verbose')
+    })
+
+    it('should not use em dashes', () => {
+      const { stdout } = runCli('--help')
+
+      expect(stdout).not.toContain('\u2014')
     })
   })
 

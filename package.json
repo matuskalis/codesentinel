@@ -1,7 +1,7 @@
 {
   "name": "codesentinel",
   "version": "0.1.0",
-  "description": "Deterministic security scanner for startup-stack code — catch secrets, env leaks, and misconfigurations before they ship",
+  "description": "Deterministic security scanner for Next.js stacks: catches hardcoded secrets, env leaks into the client bundle and misconfigurations before you deploy",
   "type": "module",
   "license": "MIT",
   "author": "Matus Kalis",

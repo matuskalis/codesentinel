@@ -54,7 +54,7 @@ export const nextPublicSecretRule: RuleDefinition = {
         title: 'Secret exposed via NEXT_PUBLIC_ prefix',
         description: `The environment variable on line ${lineNumber} uses the \`NEXT_PUBLIC_\` prefix, which exposes its value to client-side JavaScript bundles.`,
         explanation: 'Variables prefixed with `NEXT_PUBLIC_` are inlined into the client-side JavaScript bundle at build time. Secrets, keys, tokens, and passwords should never use this prefix as they will be visible to anyone inspecting the browser JavaScript.',
-        fixSuggestion: 'Remove the `NEXT_PUBLIC_` prefix — secrets should only be available server-side. Use a server action or API route to access this value.',
+        fixSuggestion: 'Remove the `NEXT_PUBLIC_` prefix so the secret stays server-side. Use a server action or API route to access this value.',
         filePath: file.filePath,
         startLine: lineNumber,
         endLine: lineNumber,

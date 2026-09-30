@@ -126,7 +126,7 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  process.stdout.write('\nCodeSentinel scan passed — no blocking findings.\n')
+  process.stdout.write('\nCodeSentinel scan passed: no blocking findings.\n')
 }
 
 main().catch(err => {
