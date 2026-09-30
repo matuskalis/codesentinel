@@ -46,10 +46,20 @@ var DEFAULT_SCAN_LIMITS = {
     "*.gz"
   ]
 };
-var DIRECTORY_SCAN_LIMITS = {
-  ...DEFAULT_SCAN_LIMITS,
-  maxFilesPerScan: Number.POSITIVE_INFINITY
-};
+var SCAN_TIMEOUT_ENV = "CODESENTINEL_SCAN_TIMEOUT_MS";
+function scanTimeoutFromEnv(env) {
+  const raw = env[SCAN_TIMEOUT_ENV];
+  if (raw === void 0 || raw === "") return DEFAULT_SCAN_LIMITS.scanTimeoutMs;
+  if (!/^\d+$/.test(raw)) throw new Error(`${SCAN_TIMEOUT_ENV} must be a whole number of milliseconds, got "${raw}"`);
+  return Number(raw);
+}
+function directoryScanLimits(env = process.env) {
+  return {
+    ...DEFAULT_SCAN_LIMITS,
+    maxFilesPerScan: Number.POSITIVE_INFINITY,
+    scanTimeoutMs: scanTimeoutFromEnv(env)
+  };
+}
 function shouldSkipFile(filePath, limits = DEFAULT_SCAN_LIMITS) {
   const segments = filePath.split(/[\\/]/);
   const fileName = segments[segments.length - 1];
@@ -64,6 +74,7 @@ function shouldSkipFile(filePath, limits = DEFAULT_SCAN_LIMITS) {
 // src/cli/walker.ts
 var MAX_FILE_BYTES = 512 * 1024;
 var GIT_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024;
+var SCAN_ROOT_PATH = ".";
 var SCAN_EXTENSIONS = /* @__PURE__ */ new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".yml", ".yaml"]);
 var SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".next", "dist", "build", ".git", "coverage", ".turbo", ".vercel"]);
 function isEnvFile(name) {
@@ -99,12 +110,13 @@ function findGitIgnored(dir, relativePaths) {
   if (relativePaths.length === 0) return /* @__PURE__ */ new Set();
   const result = spawnSync("git", ["-c", "core.fsmonitor=false", "check-ignore", "-z", "--stdin"], {
     cwd: dir,
-    input: relativePaths.map(toGitPath).join("\0"),
+    input: [SCAN_ROOT_PATH, ...relativePaths.map(toGitPath)].join("\0"),
     encoding: "utf-8",
     maxBuffer: GIT_OUTPUT_LIMIT_BYTES
   });
   if (result.error || result.status !== 0) return /* @__PURE__ */ new Set();
-  return new Set(result.stdout.split("\0").filter(Boolean));
+  const ignored = new Set(result.stdout.split("\0").filter(Boolean));
+  return ignored.has(SCAN_ROOT_PATH) ? /* @__PURE__ */ new Set() : ignored;
 }
 function buildFileChanges(dir) {
   const absoluteDir = path.resolve(dir);
@@ -129,6 +141,15 @@ function buildFileChanges(dir) {
     }
   }
   return files;
+}
+
+// src/cli/exit-code.ts
+var EXIT_BLOCKING = 1;
+var EXIT_INCOMPLETE = 3;
+function exitCodeFor(blockingCount, filesNotScanned) {
+  if (blockingCount > 0) return EXIT_BLOCKING;
+  if (filesNotScanned > 0) return EXIT_INCOMPLETE;
+  return 0;
 }
 
 // src/lib/scanner/file-classifier.ts
@@ -642,7 +663,7 @@ async function runScan(files, mutedRuleIds = [], limits = DEFAULT_SCAN_LIMITS) {
   let filesScanned = 0;
   const filesToScan = files.filter((f) => f.status !== "deleted").filter((f) => !shouldSkipFile(f.filePath, limits)).filter((f) => Buffer.byteLength(f.content, "utf-8") <= limits.maxBytesPerFile).slice(0, limits.maxFilesPerScan);
   for (const file of filesToScan) {
-    if (Date.now() - startTime > limits.scanTimeoutMs) {
+    if (Date.now() - startTime >= limits.scanTimeoutMs) {
       logger.warn({ filesScanned, totalFiles: filesToScan.length }, "Scan timeout reached");
       break;
     }
@@ -680,6 +701,7 @@ async function runScan(files, mutedRuleIds = [], limits = DEFAULT_SCAN_LIMITS) {
       totalFindings: dedupedFindings.length,
       bySeverity,
       filesScanned,
+      filesNotScanned: filesToScan.length - filesScanned,
       rulesApplied: rulesApplied.size,
       scanDurationMs: scanDuration
     }
@@ -744,16 +766,28 @@ async function main() {
     process.exit(2);
   }
   const files = buildFileChanges(absoluteDir);
-  const result = await runScan(files, [], DIRECTORY_SCAN_LIMITS);
+  const result = await runScan(files, [], directoryScanLimits());
   const sorted = [...result.findings].sort(
     (a, b) => SEVERITY_ORDER2[b.severity] - SEVERITY_ORDER2[a.severity]
   );
   for (const finding of sorted) {
     emitAnnotation(finding);
   }
+  const { filesNotScanned } = result.summary;
+  if (filesNotScanned > 0) {
+    const verb = filesNotScanned === 1 ? "file was" : "files were";
+    process.stdout.write(
+      `::warning::CodeSentinel scan incomplete: ${filesNotScanned} ${verb} not scanned because the time limit was reached.
+`
+    );
+  }
   process.stdout.write("::group::CodeSentinel Scan Summary\n");
   process.stdout.write(`Files scanned: ${result.summary.filesScanned}
 `);
+  if (filesNotScanned > 0) {
+    process.stdout.write(`Files not scanned: ${filesNotScanned}
+`);
+  }
   process.stdout.write(`Rules applied: ${result.summary.rulesApplied}
 `);
   process.stdout.write(`Scan duration: ${result.summary.scanDurationMs}ms
@@ -789,13 +823,20 @@ async function main() {
 `);
   }
   const blockingCount = shouldFail(result.findings, failOn);
+  const exitCode = exitCodeFor(blockingCount, filesNotScanned);
   if (blockingCount > 0) {
     process.stdout.write(
       `
 ::error::CodeSentinel found ${blockingCount} blocking finding(s) at ${failOn}+ severity. Scan failed.
 `
     );
-    process.exit(1);
+    process.exit(exitCode);
+  }
+  if (filesNotScanned > 0) {
+    process.stdout.write(
+      "\n::error::CodeSentinel scan incomplete, not a pass. Raise the time limit with CODESENTINEL_SCAN_TIMEOUT_MS (milliseconds).\n"
+    );
+    process.exit(exitCode);
   }
   process.stdout.write("\nCodeSentinel scan passed: no blocking findings.\n");
 }
