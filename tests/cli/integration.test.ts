@@ -218,6 +218,26 @@ describe('CLI integration', () => {
       }
     })
 
+    it('should still report secrets when the scanned directory is itself ignored by a parent repository', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codesentinel-parent-'))
+      try {
+        execSync('git init -q', { cwd: repoDir, stdio: 'ignore' })
+        fs.writeFileSync(path.join(repoDir, '.gitignore'), 'vendored/\n')
+        const vendoredDir = path.join(repoDir, 'vendored')
+        fs.mkdirSync(vendoredDir)
+        fs.writeFileSync(path.join(vendoredDir, 'payments.ts'), `const key = "${FAKE_SK_LIVE}";\n`)
+        fs.writeFileSync(path.join(vendoredDir, '.env.production'), `STRIPE_SECRET_KEY=${FAKE_SK_LIVE}\n`)
+
+        const { stdout, exitCode } = runCli(`scan ${vendoredDir} --json`)
+        const rules = JSON.parse(stdout).findings.map((finding: { ruleId: string }) => finding.ruleId).sort()
+
+        expect(exitCode).toBe(1)
+        expect(rules).toEqual(['env-committed', 'hardcoded-secrets', 'hardcoded-secrets'])
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true })
+      }
+    })
+
     it('should still call an env file committed when it is tracked', () => {
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codesentinel-tracked-'))
       try {

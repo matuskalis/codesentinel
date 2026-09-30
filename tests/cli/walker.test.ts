@@ -237,7 +237,7 @@ describe('buildFileChanges inside a git repository', () => {
   beforeAll(() => {
     repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codesentinel-git-'))
     execFileSync('git', ['init', '-q'], { cwd: repoDir, stdio: 'ignore' })
-    fs.writeFileSync(path.join(repoDir, '.gitignore'), '.env.local\n.env.production\nlocal-config.json\n')
+    fs.writeFileSync(path.join(repoDir, '.gitignore'), '.env.local\n.env.production\nlocal-config.json\nvendored/\n')
     fs.writeFileSync(path.join(repoDir, '.env.local'), 'LOCAL_ONLY=1\n')
     fs.writeFileSync(path.join(repoDir, '.env.production'), 'FORCE_ADDED=1\n')
     fs.writeFileSync(path.join(repoDir, '.env'), 'COMMITTED=1\n')
@@ -245,6 +245,10 @@ describe('buildFileChanges inside a git repository', () => {
     fs.writeFileSync(path.join(repoDir, 'index.ts'), 'export const a = 1;\n')
     fs.mkdirSync(path.join(repoDir, 'src'))
     fs.writeFileSync(path.join(repoDir, 'src', 'nested.ts'), 'export const nested = true;\n')
+    fs.mkdirSync(path.join(repoDir, 'vendored', 'deeper'), { recursive: true })
+    fs.writeFileSync(path.join(repoDir, 'vendored', 'leaked.ts'), 'export const leaked = 1;\n')
+    fs.writeFileSync(path.join(repoDir, 'vendored', '.env.production'), 'VENDORED=1\n')
+    fs.writeFileSync(path.join(repoDir, 'vendored', 'deeper', 'inner.ts'), 'export const inner = 1;\n')
     execFileSync('git', ['add', '-f', '.env.production'], { cwd: repoDir, stdio: 'ignore' })
   })
 
@@ -283,6 +287,40 @@ describe('buildFileChanges inside a git repository', () => {
 
     expect(isIgnored(files, '.env.local')).toBe(true)
     expect(isIgnored(files, 'nested.ts')).toBe(false)
+  })
+
+  it('should mark files inside an ignored directory when the scan root is the project', () => {
+    const files = buildFileChanges(repoDir)
+
+    expect(isIgnored(files, path.join('vendored', 'leaked.ts'))).toBe(true)
+  })
+
+  it('should not use the signal when the scan root itself is ignored by the parent repository', () => {
+    const files = buildFileChanges(path.join(repoDir, 'vendored'))
+
+    expect(files.map(f => f.filePath).sort()).toEqual(['.env.production', path.join('deeper', 'inner.ts'), 'leaked.ts'])
+    expect(files.every(f => f.gitIgnored === false)).toBe(true)
+  })
+
+  it('should not use the signal when an ancestor of the scan root is ignored', () => {
+    const files = buildFileChanges(path.join(repoDir, 'vendored', 'deeper'))
+
+    expect(files.map(f => f.filePath)).toEqual(['inner.ts'])
+    expect(files.every(f => f.gitIgnored === false)).toBe(true)
+  })
+
+  it('should use the scan root\'s own rules when it is a separate repository inside an ignored directory', () => {
+    const nestedDir = path.join(repoDir, 'vendored', 'nested-repo')
+    fs.mkdirSync(nestedDir)
+    execFileSync('git', ['init', '-q'], { cwd: nestedDir, stdio: 'ignore' })
+    fs.writeFileSync(path.join(nestedDir, '.gitignore'), '.env.local\n')
+    fs.writeFileSync(path.join(nestedDir, '.env.local'), 'NESTED=1\n')
+    fs.writeFileSync(path.join(nestedDir, 'app.ts'), 'export const app = 1;\n')
+
+    const files = buildFileChanges(nestedDir)
+
+    expect(isIgnored(files, '.env.local')).toBe(true)
+    expect(isIgnored(files, 'app.ts')).toBe(false)
   })
 
   it('should mark nothing outside a git repository', () => {

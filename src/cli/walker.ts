@@ -6,6 +6,7 @@ import { shouldSkipFile, DEFAULT_SCAN_LIMITS } from '@/lib/scan-limits'
 
 const MAX_FILE_BYTES = 512 * 1024
 const GIT_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024
+const SCAN_ROOT_PATH = '.'
 const SCAN_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.yml', '.yaml'])
 const SKIP_DIRS = new Set(['node_modules', '.next', 'dist', 'build', '.git', 'coverage', '.turbo', '.vercel'])
 
@@ -51,18 +52,22 @@ function toGitPath(relativePath: string): string {
 // Returns nothing when git is missing or the directory is not inside a repository.
 // The repository's own git config is overridden so that scanning an untrusted checkout
 // cannot make git run a command of its choosing.
+// When a parent repository ignores the scan root itself, git reports every file under it
+// as ignored. That says nothing about the files, so the signal is dropped and they are
+// all scanned as if there were no git context.
 function findGitIgnored(dir: string, relativePaths: string[]): Set<string> {
   if (relativePaths.length === 0) return new Set()
 
   const result = spawnSync('git', ['-c', 'core.fsmonitor=false', 'check-ignore', '-z', '--stdin'], {
     cwd: dir,
-    input: relativePaths.map(toGitPath).join('\0'),
+    input: [SCAN_ROOT_PATH, ...relativePaths.map(toGitPath)].join('\0'),
     encoding: 'utf-8',
     maxBuffer: GIT_OUTPUT_LIMIT_BYTES,
   })
   if (result.error || result.status !== 0) return new Set()
 
-  return new Set(result.stdout.split('\0').filter(Boolean))
+  const ignored = new Set(result.stdout.split('\0').filter(Boolean))
+  return ignored.has(SCAN_ROOT_PATH) ? new Set() : ignored
 }
 
 export function buildFileChanges(dir: string): FileChange[] {
