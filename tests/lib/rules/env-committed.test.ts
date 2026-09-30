@@ -236,6 +236,17 @@ describe('env-committed', () => {
       expect(findings[0].endLine).toBe(3)
     })
 
+    it('should not count the newline that ends the file as an extra line', () => {
+      const file = makeFileChange({
+        filePath: '.env',
+        status: 'added',
+        content: 'SECRET_KEY=real_value_one\nAPI_TOKEN=real_value_two\nDB_PASSWORD=real_value_three\n',
+      })
+
+      const findings = envCommittedRule.run(file, classification)
+      expect(findings[0].endLine).toBe(3)
+    })
+
     it('should not flag a file that .gitignore keeps out of the repository', () => {
       const file = makeFileChange({
         filePath: '.env.local',

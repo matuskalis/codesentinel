@@ -81,7 +81,7 @@ export const envCommittedRule: RuleDefinition = {
       fixSuggestion: 'Add this file to `.gitignore` and use `.env.example` with placeholder values instead.',
       filePath: file.filePath,
       startLine: 1,
-      endLine: file.content.split('\n').length,
+      endLine: file.content.replace(/\r?\n$/, '').split('\n').length,
       snippet,
       fingerprint: createFingerprint('env-committed', file.filePath, snippet),
     })
