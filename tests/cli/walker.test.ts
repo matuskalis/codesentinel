@@ -53,6 +53,13 @@ beforeAll(() => {
   fs.mkdirSync(path.join(tmpDir, 'src'))
   fs.writeFileSync(path.join(tmpDir, 'src', 'nested.ts'), 'export const nested = true;\n')
 
+  // Names that merely contain a skipped word must still be scanned
+  fs.mkdirSync(path.join(tmpDir, 'src', 'rebuild'))
+  fs.writeFileSync(path.join(tmpDir, 'src', 'rebuild', 'payments.ts'), 'export const rebuilt = true;\n')
+  fs.mkdirSync(path.join(tmpDir, 'scripts'))
+  fs.writeFileSync(path.join(tmpDir, 'scripts', 'build-invoices.ts'), 'export const invoices = true;\n')
+  fs.writeFileSync(path.join(tmpDir, 'src', 'distance.ts'), 'export const distance = 1;\n')
+
   // Large file for buildFileChanges test (> 512KB)
   const largeContent = 'x'.repeat(513 * 1024) + '\n'
   fs.writeFileSync(path.join(tmpDir, 'large.ts'), largeContent)
@@ -107,13 +114,11 @@ describe('walkDirectory', () => {
   })
 
   it('should skip dist, build, .next, and coverage directories', () => {
+    const skippedDirs = ['dist', 'build', '.next', 'coverage']
     const results = walkDirectory(tmpDir)
 
     const hasSkipped = results.some(f =>
-      f.includes(path.join('dist', '')) ||
-      f.includes(path.join('build', '')) ||
-      f.includes(path.join('.next', '')) ||
-      f.includes(path.join('coverage', ''))
+      path.relative(tmpDir, f).split(path.sep).some(segment => skippedDirs.includes(segment))
     )
 
     expect(hasSkipped).toBe(false)
@@ -214,5 +219,13 @@ describe('buildFileChanges', () => {
 
     expect(nestedFile).toBeDefined()
     expect(nestedFile!.content).toContain('nested')
+  })
+
+  it('should keep files whose path merely contains build or dist', () => {
+    const filePaths = buildFileChanges(tmpDir).map(f => f.filePath)
+
+    expect(filePaths).toContain(path.join('src', 'rebuild', 'payments.ts'))
+    expect(filePaths).toContain(path.join('scripts', 'build-invoices.ts'))
+    expect(filePaths).toContain(path.join('src', 'distance.ts'))
   })
 })

@@ -36,11 +36,20 @@ export const DEFAULT_SCAN_LIMITS: ScanLimits = {
   ],
 }
 
+// A directory scan has no cost budget like a pull request scan, so it must not stop at 500 files.
+export const DIRECTORY_SCAN_LIMITS: ScanLimits = {
+  ...DEFAULT_SCAN_LIMITS,
+  maxFilesPerScan: Number.POSITIVE_INFINITY,
+}
+
 export function shouldSkipFile(filePath: string, limits: ScanLimits = DEFAULT_SCAN_LIMITS): boolean {
+  const segments = filePath.split(/[\\/]/)
+  const fileName = segments[segments.length - 1]
+
   return limits.skipPatterns.some(pattern => {
     if (pattern.startsWith('*.')) {
-      return filePath.endsWith(pattern.slice(1))
+      return fileName.endsWith(pattern.slice(1))
     }
-    return filePath.includes(pattern)
+    return segments.includes(pattern)
   })
 }

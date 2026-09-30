@@ -5,6 +5,7 @@ if (!process.argv.includes('--verbose')) {
 
 import * as path from 'node:path'
 import * as fs from 'node:fs'
+import { DIRECTORY_SCAN_LIMITS } from '@/lib/scan-limits'
 import { buildFileChanges } from './walker.js'
 import { formatTerminal, formatJson, formatFailMessage, formatPassMessage } from './formatter.js'
 import { runScan } from '@/lib/scanner'
@@ -147,7 +148,7 @@ async function main(): Promise<void> {
   }
 
   const files = buildFileChanges(absoluteDir)
-  const result = await runScan(files, [])
+  const result = await runScan(files, [], DIRECTORY_SCAN_LIMITS)
 
   if (options.json && !options.quiet) {
     process.stdout.write(formatJson(result) + '\n')

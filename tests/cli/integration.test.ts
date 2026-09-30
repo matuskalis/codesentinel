@@ -158,6 +158,26 @@ describe('CLI integration', () => {
     })
   })
 
+  describe('large projects', () => {
+    it('should scan every file, not only the first 500', () => {
+      const bigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codesentinel-big-'))
+      try {
+        for (let index = 0; index < 505; index++) {
+          const name = `file-${String(index).padStart(3, '0')}.ts`
+          const content = index === 504 ? `const key = "${FAKE_SK_LIVE}";\n` : `export const value${index} = ${index};\n`
+          fs.writeFileSync(path.join(bigDir, name), content)
+        }
+
+        const parsed = JSON.parse(runCli(`scan ${bigDir} --json`).stdout)
+
+        expect(parsed.summary.filesScanned).toBe(505)
+        expect(parsed.findings.map((finding: { filePath: string }) => finding.filePath)).toEqual(['file-504.ts'])
+      } finally {
+        fs.rmSync(bigDir, { recursive: true, force: true })
+      }
+    })
+  })
+
   describe('--help flag', () => {
     it('should print usage information', () => {
       const { stdout, exitCode } = runCli('--help')

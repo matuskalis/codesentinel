@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import * as fs from 'node:fs'
 import { buildFileChanges } from './walker.js'
 import { runScan } from '@/lib/scanner'
+import { DIRECTORY_SCAN_LIMITS } from '@/lib/scan-limits'
 import type { Severity, RuleFinding } from '@/types'
 
 const SEVERITY_ORDER: Record<Severity, number> = {
@@ -73,7 +74,7 @@ async function main(): Promise<void> {
   }
 
   const files = buildFileChanges(absoluteDir)
-  const result = await runScan(files, [])
+  const result = await runScan(files, [], DIRECTORY_SCAN_LIMITS)
 
   // Emit annotations for each finding
   const sorted = [...result.findings].sort(
