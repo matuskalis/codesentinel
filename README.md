@@ -104,7 +104,7 @@ Exit codes: `0` nothing blocks, `1` a finding blocks, `2` usage error (unknown f
 
 Numbers from runs at this commit, on an M1 Pro.
 
-- **Tests:** 494 passing in 27 files (`pnpm test:run`, about 11 seconds). They cover each rule with positive and negative cases, the scanner, scoring, the walker, the formatter, and the real CLI through its exit codes.
+- **Tests:** 504 passing in 28 files (`pnpm test:run`, about 15 seconds). They cover each rule with positive and negative cases, the scanner, scoring, the walker, the formatter, the CLI through its exit codes, and the committed `dist/` bundles the Action runs.
 - **Fixtures:** `pnpm fixtures` scans 3 fixtures (7 files) and finds 6 of 6 expected findings with 0 unexpected ones. These are hand-written regression cases, not a benchmark. They show the rules still do what they were written to do, not how often they are right on other people's code.
 - **Real-world precision and recall:** not measured here. Earlier runs over public repositories are not reproduced in this repository, so this README makes no claim about them.
 - **Speed:** scanning this repository (146 files) takes a median of 14 ms inside the scanner and 123 ms wall clock including Node start-up and the git check (21 runs). The laptop was under heavy load, so read these as upper bounds.
